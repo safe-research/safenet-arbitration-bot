@@ -33,7 +33,7 @@ const multibase = "b"
 var encoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // Compute returns the CID of content stored as a single raw block.
-func Compute(content []byte) CID {
+func ComputeCID(content []byte) CID {
 	return CID{digest: sha256.Sum256(content)}
 }
 
@@ -59,6 +59,17 @@ func ParseCID(s string) (CID, error) {
 	var cid CID
 	copy(cid.digest[:], digest)
 	return cid, nil
+}
+
+// ParseCIDFromURL parses an IPFS URL of the form "ipfs://<cid>", as used by
+// ENS content hash records, such as
+// "ipfs://bafkreih7rr54gpwialfg544kfhmjy5axojvhucyv57ll2sw6u6tzyilgpy".
+func ParseCIDFromURL(url string) (CID, error) {
+	s, ok := strings.CutPrefix(url, "ipfs://")
+	if !ok {
+		return CID{}, fmt.Errorf("invalid IPFS URL %q: missing ipfs:// scheme", url)
+	}
+	return ParseCID(s)
 }
 
 // String returns the CID in its canonical string form.

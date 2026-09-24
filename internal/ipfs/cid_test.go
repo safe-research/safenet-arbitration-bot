@@ -2,7 +2,7 @@ package ipfs
 
 import "testing"
 
-func TestCompute(t *testing.T) {
+func TestComputeCID(t *testing.T) {
 	for _, tc := range []struct {
 		content string
 		cid     string
@@ -10,8 +10,8 @@ func TestCompute(t *testing.T) {
 		{"", "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"},
 		{"hello world", "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e"},
 	} {
-		if got := Compute([]byte(tc.content)).String(); got != tc.cid {
-			t.Errorf("Compute(%q): got %s, want %s", tc.content, got, tc.cid)
+		if got := ComputeCID([]byte(tc.content)).String(); got != tc.cid {
+			t.Errorf("ComputeCID(%q): got %s, want %s", tc.content, got, tc.cid)
 		}
 	}
 }
@@ -26,8 +26,8 @@ func TestParseCID(t *testing.T) {
 		t.Errorf("String: got %s, want %s", cid, s)
 	}
 
-	if cid, _ := ParseCID("bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"); cid != Compute(nil) {
-		t.Errorf("ParseCID: CID of empty content does not equal Compute(nil)")
+	if cid, _ := ParseCID("bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"); cid != ComputeCID(nil) {
+		t.Errorf("ParseCID: CID of empty content does not equal ComputeCID(nil)")
 	}
 }
 
@@ -43,6 +43,28 @@ func TestParseCIDRejectsUnsupported(t *testing.T) {
 	} {
 		if _, err := ParseCID(s); err == nil {
 			t.Errorf("ParseCID(%s): expected an error for %q", name, s)
+		}
+	}
+}
+
+func TestParseCIDFromURL(t *testing.T) {
+	const s = "bafkreih7rr54gpwialfg544kfhmjy5axojvhucyv57ll2sw6u6tzyilgpy"
+	cid, err := ParseCIDFromURL("ipfs://" + s)
+	if err != nil {
+		t.Fatalf("ParseCIDFromURL: %v", err)
+	}
+	if cid.String() != s {
+		t.Errorf("ParseCIDFromURL: got %s, want %s", cid, s)
+	}
+
+	for _, invalid := range []string{
+		s,
+		"https://" + s,
+		"ipfs://" + s + "/charter.md",
+		"ipfs://",
+	} {
+		if _, err := ParseCIDFromURL(invalid); err == nil {
+			t.Errorf("ParseCIDFromURL(%q): expected an error", invalid)
 		}
 	}
 }

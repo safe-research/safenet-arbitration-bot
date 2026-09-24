@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/xdg"
 )
 
 // Config is the Arbot configuration.
@@ -43,24 +45,10 @@ func Load(path string) (Config, error) {
 // order of precedence.
 func searchPaths() []string {
 	paths := []string{"arbot.config.json"}
-	if dir := xdgConfigHome(); dir != "" {
+	if dir := xdg.ConfigHome(); dir != "" {
 		paths = append(paths, filepath.Join(dir, "arbot", "config.json"))
 	}
 	return paths
-}
-
-// xdgConfigHome returns the XDG base directory for user configuration files,
-// or an empty string if it can't be determined. The XDG Base Directory
-// Specification requires ignoring $XDG_CONFIG_HOME when it is not absolute.
-func xdgConfigHome() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config")
 }
 
 func load(path string) (Config, error) {
