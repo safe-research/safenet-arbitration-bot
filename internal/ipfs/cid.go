@@ -1,5 +1,5 @@
-// Package ipfs implements the parts of IPFS that Arbot needs to verify
-// content fetched from untrusted gateways.
+// Package ipfs implements the parts of IPFS that Arbot needs to verify content
+// fetched from untrusted gateways.
 package ipfs
 
 import (
@@ -22,12 +22,12 @@ type CID struct {
 }
 
 // prefix is the binary CID prefix for the supported format: the CID version
-// (1), the multicodec (raw, 0x55), the multihash function (sha2-256, 0x12),
-// and the digest length (32 bytes).
+// (1), the multicodec (raw, 0x55), the multihash function (sha2-256, 0x12), and
+// the digest length (32 bytes).
 var prefix = []byte{0x01, 0x55, 0x12, sha256.Size}
 
-// multibase is the multibase prefix of lowercase, unpadded RFC 4648 base32,
-// the default string encoding of CIDv1.
+// multibase is the multibase prefix of lowercase, unpadded RFC 4648 base32, the
+// default string encoding of CIDv1.
 const multibase = "b"
 
 var encoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
@@ -61,8 +61,8 @@ func ParseCID(s string) (CID, error) {
 	return cid, nil
 }
 
-// ParseCIDFromURL parses an IPFS URL of the form "ipfs://<cid>", as used by
-// ENS content hash records, such as
+// ParseCIDFromURL parses an IPFS URL of the form "ipfs://<cid>", as used by ENS
+// content hash records, such as
 // "ipfs://bafkreih7rr54gpwialfg544kfhmjy5axojvhucyv57ll2sw6u6tzyilgpy".
 func ParseCIDFromURL(url string) (CID, error) {
 	s, ok := strings.CutPrefix(url, "ipfs://")

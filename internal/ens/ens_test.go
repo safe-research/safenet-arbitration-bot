@@ -69,9 +69,9 @@ func abiBytes(data string) string {
 	return word(32) + word(uint64(len(data)/2)) + padded
 }
 
-// mainnet starts an Ethereum Mainnet node whose eth_call results are looked
-// up by the hex call data (without 0x) and the target address, and returns
-// an ENS client for it.
+// mainnet starts an Ethereum Mainnet node whose eth_call results are looked up
+// by the hex call data (without 0x) and the target address, and returns an ENS
+// client for it.
 func mainnet(t *testing.T, calls map[string]string) *Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

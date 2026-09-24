@@ -28,16 +28,15 @@ type rpcList struct {
 	http *http.Client
 
 	mu sync.Mutex
-	// rpcs maps chain IDs to their RPC URLs, or is nil if the list hasn't
-	// been downloaded yet. A failed download leaves it nil, so the next call
-	// retries.
+	// rpcs maps chain IDs to their RPC URLs, or is nil if the list hasn't been
+	// downloaded yet. A failed download leaves it nil, so the next call retries.
 	rpcs map[uint64][]string
 }
 
 var defaultRPCs = &rpcList{url: RPCListURL, http: http.DefaultClient}
 
-// DefaultRPCs returns the public HTTP(S) RPC URLs from RPCListURL for the
-// chain with the given ID. The list is downloaded at most once per process.
+// DefaultRPCs returns the public HTTP(S) RPC URLs from RPCListURL for the chain
+// with the given ID. The list is downloaded at most once per process.
 func DefaultRPCs(ctx context.Context, chainID uint64) ([]string, error) {
 	rpcs, err := defaultRPCs.get(ctx)
 	if err != nil {
@@ -65,8 +64,8 @@ func (l *rpcList) get(ctx context.Context) (map[uint64][]string, error) {
 }
 
 // download fetches and parses the RPC list. It keeps only HTTP(S) URLs,
-// skipping WebSocket URLs and templates that need an API key filled in, such
-// as "https://mainnet.infura.io/v3/${INFURA_API_KEY}".
+// skipping WebSocket URLs and templates that need an API key filled in, such as
+// "https://mainnet.infura.io/v3/${INFURA_API_KEY}".
 func (l *rpcList) download(ctx context.Context) (map[uint64][]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.url, nil)
 	if err != nil {

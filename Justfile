@@ -1,6 +1,6 @@
 # Repo-wide command runner.
 
-prettier := "npm exec -y -- prettier@3.9.9"
+prettier := "npm exec -y --prefer-offline -- prettier@3.9.9"
 
 # List available recipes.
 default:

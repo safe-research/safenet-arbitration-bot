@@ -14,9 +14,9 @@ func ConfigHome() string {
 	return dir("XDG_CONFIG_HOME", ".config")
 }
 
-// CacheHome returns the base directory for user cache files:
-// $XDG_CACHE_HOME, defaulting to ~/.cache. It returns an empty string if the
-// directory can't be determined.
+// CacheHome returns the base directory for user cache files: $XDG_CACHE_HOME,
+// defaulting to ~/.cache. It returns an empty string if the directory can't be
+// determined.
 func CacheHome() string {
 	return dir("XDG_CACHE_HOME", ".cache")
 }

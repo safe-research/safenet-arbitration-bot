@@ -21,8 +21,8 @@ func serve(t *testing.T, want, reply string) *Client {
 	wantRequest := canonical(t, want)
 	response := decode(t, reply)
 
-	// The handler runs on the server's goroutine, where t.Fatal must not be
-	// called, so it only reports errors.
+	// The handler runs on the server's goroutine, where t.Fatal must not be called,
+	// so it only reports errors.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method: got %s, want POST", r.Method)
@@ -163,9 +163,9 @@ func TestBlockNumber(t *testing.T) {
 	}
 }
 
-// node starts a JSON-RPC server that reports chainID to eth_chainId, and
-// passes every other request to handle. It returns the server's URL and a count
-// of the eth_chainId requests it has served.
+// node starts a JSON-RPC server that reports chainID to eth_chainId, and passes
+// every other request to handle. It returns the server's URL and a count of the
+// eth_chainId requests it has served.
 func node(t *testing.T, chainID string, handle func(w http.ResponseWriter, id uint64)) (string, *atomic.Int64) {
 	t.Helper()
 	var chainIDRequests atomic.Int64

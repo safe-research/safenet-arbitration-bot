@@ -11,8 +11,8 @@ import (
 )
 
 // newClient returns a client for the gateway at url, with $XDG_CACHE_HOME
-// pointing at an empty directory so that tests don't share a cache. It
-// returns the client's cache directory.
+// pointing at an empty directory so that tests don't share a cache. It returns
+// the client's cache directory.
 func newClient(t *testing.T, url string) (*Client, string) {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
@@ -20,8 +20,8 @@ func newClient(t *testing.T, url string) (*Client, string) {
 	return client, client.cache
 }
 
-// gateway starts an HTTP gateway that serves content under its CID, and
-// returns a client for it along with a count of the requests it has served.
+// gateway starts an HTTP gateway that serves content under its CID, and returns
+// a client for it along with a count of the requests it has served.
 func gateway(t *testing.T, content []byte) (*Client, *atomic.Int64) {
 	t.Helper()
 	var requests atomic.Int64
@@ -53,7 +53,7 @@ func TestFetch(t *testing.T) {
 func TestFetchGatewayWithTrailingSlash(t *testing.T) {
 	content := []byte("content")
 	client, _ := gateway(t, content)
-	client.gateway += "/"
+	client.url += "/"
 	if _, err := client.Fetch(t.Context(), ComputeCID(content)); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}

@@ -43,8 +43,8 @@ func TestNewClientWithDefaultRPC(t *testing.T) {
 	}
 	listRequests := useRPCList(t, string(list))
 
-	// Several requests, including from several clients, share one download
-	// of the list.
+	// Several requests, including from several clients, share one download of the
+	// list.
 	for range 2 {
 		client, err := NewClient(t.Context(), testChainID, "")
 		if err != nil {
@@ -93,8 +93,8 @@ func failingNode(t *testing.T) (string, *atomic.Int64) {
 }
 
 func TestNewClientTriesDefaultRPCsInOrder(t *testing.T) {
-	// Failing nodes and nodes on another chain are skipped, and nodes after
-	// the first good one are never contacted.
+	// Failing nodes and nodes on another chain are skipped, and nodes after the
+	// first good one are never contacted.
 	failing, failingRequests := failingNode(t)
 	wrongChain, wrongChainRequests := node(t, "0x64", func(w http.ResponseWriter, id uint64) {})
 	good, goodRequests := node(t, "0x1", func(w http.ResponseWriter, id uint64) {})
@@ -128,9 +128,9 @@ func TestNewClientSkipsUnresponsiveDefaultRPC(t *testing.T) {
 	connectTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { connectTimeout = previous })
 
-	// The server doesn't reliably notice the client giving up on the request,
-	// and Close waits for in-flight requests, so release the handler before
-	// closing the server (cleanups run in reverse order).
+	// The server doesn't reliably notice the client giving up on the request, and
+	// Close waits for in-flight requests, so release the handler before closing the
+	// server (cleanups run in reverse order).
 	release := make(chan struct{})
 	hanging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {

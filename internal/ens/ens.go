@@ -38,8 +38,9 @@ func NewClient(eth *ethrpc.Client) (*Client, error) {
 	return &Client{eth: eth}, nil
 }
 
-// Resolve returns the content hash record (EIP-1577) of name as of block, as
-// a URL such as "ipfs://bafkreih7rr54gpwialfg544kfhmjy5axojvhucyv57ll2sw6u6tzyilgpy".
+// Resolve returns the content hash record (EIP-1577) of name as of block, as a
+// URL such as
+// "ipfs://bafkreih7rr54gpwialfg544kfhmjy5axojvhucyv57ll2sw6u6tzyilgpy".
 //
 // The name must already be normalized (ENSIP-15), for example lowercase. Only
 // names with an onchain resolver set in the registry are supported, not

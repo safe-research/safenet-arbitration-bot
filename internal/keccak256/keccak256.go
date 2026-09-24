@@ -1,8 +1,8 @@
 // Package keccak256 implements the Keccak-256 hash function used by Ethereum.
 //
 // Keccak-256 is the original Keccak submission to the SHA-3 competition, and
-// differs from the final SHA3-256 standard (crypto/sha3) in its padding, so
-// the two produce different hashes.
+// differs from the final SHA3-256 standard (crypto/sha3) in its padding, so the
+// two produce different hashes.
 package keccak256
 
 import (

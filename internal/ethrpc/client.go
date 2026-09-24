@@ -25,14 +25,14 @@ type Client struct {
 // report its chain ID, so that one unresponsive node doesn't stall it.
 var connectTimeout = 1 * time.Second
 
-// NewClient returns a client for the chain with the given ID, using the node
-// at url. If url is empty, the client uses the chain's default RPC URLs (see
+// NewClient returns a client for the chain with the given ID, using the node at
+// url. If url is empty, the client uses the chain's default RPC URLs (see
 // DefaultRPCs): it tries them one at a time, in order, and uses the first node
 // that answers with the expected chain ID.
 //
 // It checks that the node serves the expected chain (eth_chainId), since the
-// node may come from an untrusted list, and chains share contract addresses
-// and call encodings, so a wrong chain would go unnoticed otherwise.
+// node may come from an untrusted list, and chains share contract addresses and
+// call encodings, so a wrong chain would go unnoticed otherwise.
 func NewClient(ctx context.Context, chainID uint64, url string) (*Client, error) {
 	if url != "" {
 		c := &Client{chainID: chainID, url: url, http: http.DefaultClient}

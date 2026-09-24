@@ -26,8 +26,8 @@ type gatewayList struct {
 	http *http.Client
 
 	mu sync.Mutex
-	// gateways is the downloaded list, or nil if it hasn't been downloaded
-	// yet. A failed download leaves it nil, so the next call retries.
+	// gateways is the downloaded list, or nil if it hasn't been downloaded yet. A
+	// failed download leaves it nil, so the next call retries.
 	gateways []string
 }
 
@@ -39,18 +39,8 @@ func DefaultGateways(ctx context.Context) ([]string, error) {
 	return defaultGateways.get(ctx)
 }
 
-// DefaultGateway returns the first of DefaultGateways, the gateway clients use
-// when none is configured.
-func DefaultGateway(ctx context.Context) (string, error) {
-	gateways, err := DefaultGateways(ctx)
-	if err != nil {
-		return "", err
-	}
-	return gateways[0], nil
-}
-
-// get returns the gateway list, downloading it if needed. The returned list
-// is never empty.
+// get returns the gateway list, downloading it if needed. The returned list is
+// never empty.
 func (l *gatewayList) get(ctx context.Context) ([]string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

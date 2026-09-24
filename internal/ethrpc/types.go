@@ -95,8 +95,8 @@ func (n *BlockNumber) UnmarshalText(text []byte) error {
 
 // CallRequest is the message call object passed to eth_call.
 type CallRequest struct {
-	// From is the sender of the call. It is omitted if zero, which nodes
-	// treat as the zero address.
+	// From is the sender of the call. It is omitted if zero, which nodes treat as
+	// the zero address.
 	From Address `json:"from,omitzero"`
 	To   Address `json:"to"`
 	Data Bytes   `json:"data,omitempty"`
@@ -106,8 +106,8 @@ type CallRequest struct {
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	// Data holds additional error information, such as the revert data of a
-	// failed eth_call.
+	// Data holds additional error information, such as the revert data of a failed
+	// eth_call.
 	Data json.RawMessage `json:"data,omitempty"`
 }
 

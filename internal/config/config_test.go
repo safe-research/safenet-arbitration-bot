@@ -11,8 +11,7 @@ import (
 )
 
 // setup isolates a test from the real environment: it changes into an empty
-// working directory and points $HOME and $XDG_CONFIG_HOME at empty
-// directories.
+// working directory and points $HOME and $XDG_CONFIG_HOME at empty directories.
 func setup(t *testing.T) (cwd, home, xdg string) {
 	cwd, home, xdg = t.TempDir(), t.TempDir(), t.TempDir()
 	t.Chdir(cwd)
@@ -39,8 +38,7 @@ func writeSource(t *testing.T, path, source string) {
 }
 
 // loadSource loads the configuration from path, and returns the source name
-// that writeSource put in it, or an empty string for the default
-// configuration.
+// that writeSource put in it, or an empty string for the default configuration.
 func loadSource(t *testing.T, path string) string {
 	t.Helper()
 	config, err := Load(path)
