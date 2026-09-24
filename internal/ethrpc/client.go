@@ -97,6 +97,27 @@ func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
 	return result, err
 }
 
+// GetLogs returns the logs matching filter (eth_getLogs). Nodes commonly limit
+// the block range of a single request, see ScanLogs for querying wider ranges.
+func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
+	var result []Log
+	err := c.request(ctx, &result, "eth_getLogs", filter)
+	return result, err
+}
+
+// BlockByNumber returns the header of the block with the given number
+// (eth_getBlockByNumber).
+func (c *Client) BlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {
+	var result *Block
+	if err := c.request(ctx, &result, "eth_getBlockByNumber", number, false); err != nil {
+		return Block{}, err
+	}
+	if result == nil {
+		return Block{}, fmt.Errorf("eth_getBlockByNumber: block %d not found", number)
+	}
+	return *result, nil
+}
+
 type request struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      uint64 `json:"id"`
@@ -134,8 +155,14 @@ func (c *Client) request(ctx context.Context, result any, method string, params 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s: HTTP %s: %s", method, resp.Status, bytes.TrimSpace(snippet))
+		// Some nodes reject requests with an HTTP error status and a JSON-RPC error
+		// in the body, such as for a block range that is too large.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		var res response
+		if json.Unmarshal(body, &res) == nil && res.Error != nil {
+			return fmt.Errorf("%s: HTTP %s: %w", method, resp.Status, res.Error)
+		}
+		return fmt.Errorf("%s: HTTP %s: %s", method, resp.Status, bytes.TrimSpace(body[:min(len(body), 512)]))
 	}
 
 	var res response

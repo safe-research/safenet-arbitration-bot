@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
 // setup isolates a test from the real environment: it changes into an empty
@@ -125,7 +127,8 @@ func TestLoadSettings(t *testing.T) {
 	path := filepath.Join(cwd, "arbot.config.json")
 	write(t, path, `{
 		"rpcs": {"1": "https://mainnet.example", "100": "https://gnosis.example"},
-		"ipfs": "https://ipfs.example"
+		"ipfs": "https://ipfs.example",
+		"oracle": "0x00000000000000000000000000000000000000aa"
 	}`)
 
 	config, err := Load(path)
@@ -133,11 +136,21 @@ func TestLoadSettings(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	want := Config{
-		RPCs: map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
-		IPFS: "https://ipfs.example",
+		RPCs:   map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
+		IPFS:   "https://ipfs.example",
+		Oracle: ethrpc.Address{19: 0xaa},
 	}
-	if !maps.Equal(config.RPCs, want.RPCs) || config.IPFS != want.IPFS {
+	if !maps.Equal(config.RPCs, want.RPCs) || config.IPFS != want.IPFS || config.Oracle != want.Oracle {
 		t.Errorf("Load: got %+v, want %+v", config, want)
+	}
+}
+
+func TestLoadRejectsInvalidOracle(t *testing.T) {
+	cwd, _, _ := setup(t)
+	path := filepath.Join(cwd, "arbot.config.json")
+	write(t, path, `{"oracle": "0xaa"}`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load: expected an error")
 	}
 }
 

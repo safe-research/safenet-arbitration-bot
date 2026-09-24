@@ -27,6 +27,28 @@ func TestAddress(t *testing.T) {
 	}
 }
 
+func TestHash(t *testing.T) {
+	const s = "0x86e8b85731e4787f033d85108356db1e068dea243be32d422e6dc5681ff49cc1"
+	h, err := ParseHash("0x86E8B85731E4787F033D85108356DB1E068DEA243BE32D422E6DC5681FF49CC1")
+	if err != nil {
+		t.Fatalf("ParseHash: %v", err)
+	}
+	if h.String() != s {
+		t.Errorf("String: got %s, want %s", h, s)
+	}
+
+	for _, invalid := range []string{
+		s[2:],        // no prefix
+		s[:64],       // too short
+		s + "00",     // too long
+		s[:65] + "g", // not hex
+	} {
+		if _, err := ParseHash(invalid); err == nil {
+			t.Errorf("ParseHash(%q): expected an error", invalid)
+		}
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for _, tc := range []struct {
 		text string

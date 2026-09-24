@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/xdg"
 )
 
@@ -25,6 +26,9 @@ type Config struct {
 	// IPFS is the base URL of the IPFS HTTP gateway to use, such as
 	// "https://ipfs.filebase.io". If empty, a public gateway is used.
 	IPFS string `json:"ipfs"`
+	// Oracle is the address of the SentinelOracle contract on Gnosis Chain to
+	// read Safenet requests from. If zero, the default deployment is used.
+	Oracle ethrpc.Address `json:"oracle"`
 }
 
 // Load reads the configuration file at path. If path is empty, it uses the

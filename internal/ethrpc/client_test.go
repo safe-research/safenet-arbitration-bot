@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 )
@@ -163,6 +164,92 @@ func TestBlockNumber(t *testing.T) {
 	}
 }
 
+func TestGetLogs(t *testing.T) {
+	client := serve(t,
+		`{
+			"jsonrpc": "2.0",
+			"method": "eth_getLogs",
+			"params": [{
+				"fromBlock": "0x10",
+				"toBlock": "0x20",
+				"address": ["0x00000000000000000000000000000000000000aa"],
+				"topics": [
+					["0x0000000000000000000000000000000000000000000000000000000000000001"],
+					null,
+					[
+						"0x0000000000000000000000000000000000000000000000000000000000000002",
+						"0x0000000000000000000000000000000000000000000000000000000000000003"
+					]
+				]
+			}]
+		}`,
+		`{"result": [{
+			"address": "0x00000000000000000000000000000000000000aa",
+			"topics": ["0x0000000000000000000000000000000000000000000000000000000000000001"],
+			"data": "0xcafe",
+			"blockNumber": "0x11",
+			"blockHash": "0x00000000000000000000000000000000000000000000000000000000000000bb",
+			"transactionHash": "0x00000000000000000000000000000000000000000000000000000000000000cc",
+			"transactionIndex": "0x0",
+			"logIndex": "0x2",
+			"removed": false
+		}]}`,
+	)
+
+	logs, err := client.GetLogs(t.Context(), LogFilter{
+		FromBlock: 16,
+		ToBlock:   32,
+		Addresses: []Address{{19: 0xaa}},
+		Topics:    [][]Hash{{{31: 1}}, nil, {{31: 2}, {31: 3}}},
+	})
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	want := Log{
+		Address:         Address{19: 0xaa},
+		Topics:          []Hash{{31: 1}},
+		Data:            Bytes{0xca, 0xfe},
+		BlockNumber:     17,
+		BlockHash:       Hash{31: 0xbb},
+		TransactionHash: Hash{31: 0xcc},
+		LogIndex:        2,
+	}
+	if len(logs) != 1 || !reflect.DeepEqual(logs[0], want) {
+		t.Errorf("GetLogs: got %+v, want [%+v]", logs, want)
+	}
+}
+
+func TestBlockByNumber(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,
+		`{"result": {
+			"number": "0x2625a00",
+			"hash": "0x00000000000000000000000000000000000000000000000000000000000000bb",
+			"timestamp": "0x68d3a000",
+			"transactions": []
+		}}`,
+	)
+
+	block, err := client.BlockByNumber(t.Context(), 40_000_000)
+	if err != nil {
+		t.Fatalf("BlockByNumber: %v", err)
+	}
+	want := Block{Number: 40_000_000, Hash: Hash{31: 0xbb}, Timestamp: 0x68d3a000}
+	if block != want {
+		t.Errorf("BlockByNumber: got %+v, want %+v", block, want)
+	}
+}
+
+func TestBlockByNumberNotFound(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,
+		`{"result": null}`,
+	)
+	if _, err := client.BlockByNumber(t.Context(), 40_000_000); err == nil {
+		t.Fatal("BlockByNumber: expected an error")
+	}
+}
+
 // node starts a JSON-RPC server that reports chainID to eth_chainId, and passes
 // every other request to handle. It returns the server's URL and a count of the
 // eth_chainId requests it has served.
@@ -205,6 +292,25 @@ func TestRequestHTTPError(t *testing.T) {
 	})
 	if _, err := connect(t, url).Call(t.Context(), CallRequest{}, 1); err == nil {
 		t.Fatal("Call: expected an error")
+	}
+}
+
+func TestRequestHTTPErrorWithRPCError(t *testing.T) {
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      0,
+			"error":   map[string]any{"code": -32602, "message": "block range too large"},
+		})
+	})
+	_, err := connect(t, url).GetLogs(t.Context(), LogFilter{})
+	rpcErr, ok := errors.AsType[*Error](err)
+	if !ok {
+		t.Fatalf("GetLogs: got %v, want an *Error", err)
+	}
+	if rpcErr.Code != -32602 || rpcErr.Message != "block range too large" {
+		t.Errorf("error: got %+v", rpcErr)
 	}
 }
 

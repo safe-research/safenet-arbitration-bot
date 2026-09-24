@@ -41,6 +41,37 @@ func (a *Address) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// Hash is a 32-byte hash, such as a block or transaction hash, or a log topic.
+type Hash [32]byte
+
+// ParseHash parses a 0x-prefixed hex hash.
+func ParseHash(s string) (Hash, error) {
+	var h Hash
+	err := h.UnmarshalText([]byte(s))
+	return h, err
+}
+
+// String returns the hash as lowercase 0x-prefixed hex.
+func (h Hash) String() string {
+	return encodeHex(h[:])
+}
+
+func (h Hash) MarshalText() ([]byte, error) {
+	return []byte(h.String()), nil
+}
+
+func (h *Hash) UnmarshalText(text []byte) error {
+	b, err := decodeHex(text)
+	if err != nil {
+		return fmt.Errorf("invalid hash: %w", err)
+	}
+	if len(b) != len(h) {
+		return fmt.Errorf("invalid hash: got %d bytes, want %d", len(b), len(h))
+	}
+	copy(h[:], b)
+	return nil
+}
+
 // Bytes is arbitrary binary data, encoded as 0x-prefixed hex.
 type Bytes []byte
 
@@ -100,6 +131,40 @@ type CallRequest struct {
 	From Address `json:"from,omitzero"`
 	To   Address `json:"to"`
 	Data Bytes   `json:"data,omitempty"`
+}
+
+// LogFilter selects the logs that eth_getLogs returns.
+type LogFilter struct {
+	FromBlock BlockNumber `json:"fromBlock"`
+	ToBlock   BlockNumber `json:"toBlock"`
+	// Addresses are the contracts whose logs match. If empty, logs from any
+	// contract match.
+	Addresses []Address `json:"address,omitempty"`
+	// Topics[i] lists the values that match the log's i-th topic, the first being
+	// the event signature. A nil entry matches any value, and trailing topics that
+	// are not listed also match any value.
+	Topics [][]Hash `json:"topics,omitempty"`
+}
+
+// Log is a log emitted by a contract, as returned by eth_getLogs.
+type Log struct {
+	Address         Address     `json:"address"`
+	Topics          []Hash      `json:"topics"`
+	Data            Bytes       `json:"data"`
+	BlockNumber     BlockNumber `json:"blockNumber"`
+	BlockHash       Hash        `json:"blockHash"`
+	TransactionHash Hash        `json:"transactionHash"`
+	LogIndex        Quantity    `json:"logIndex"`
+	// Removed is set if the log was removed by a chain reorganization.
+	Removed bool `json:"removed"`
+}
+
+// Block is a block header, as returned by eth_getBlockByNumber. Only the fields
+// that the client uses are decoded.
+type Block struct {
+	Number    BlockNumber `json:"number"`
+	Hash      Hash        `json:"hash"`
+	Timestamp Quantity    `json:"timestamp"`
 }
 
 // Error is an error returned by the JSON-RPC server.
