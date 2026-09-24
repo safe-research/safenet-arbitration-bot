@@ -77,7 +77,7 @@ The body follows the header. It contains the decoded transaction, the sentinel v
 
 ## Sub-agents
 
-Sub-agents are defined in `agents/<name>.md` (Claude Code's sub-agent format), with `.claude/agents` symlinked to that directory:
+Each sub-agent's instructions live in `agents/<name>.md`, shared by both CLIs. Stubs in `.claude/agents/<name>.md` and `.codex/agents/<name>.toml` register them with Claude Code and Codex CLI, set the model, and point to the shared instructions. Use the `add-subagent` skill (`skills/add-subagent/SKILL.md`) to add or change one.
 
 - `charter-summarizer`: summarizes a fetched Charter, preserving rule identifiers, exceptions, and section citations.
 

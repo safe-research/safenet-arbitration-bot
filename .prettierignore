@@ -1,0 +1,3 @@
+# Scratch files exchanged between agents, such as fetched Charters, which must
+# stay byte-for-byte as fetched.
+.msgboard/
