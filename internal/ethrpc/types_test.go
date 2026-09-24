@@ -55,7 +55,7 @@ func TestBytes(t *testing.T) {
 	}
 }
 
-func TestBlockNumber(t *testing.T) {
+func TestBlockNumberText(t *testing.T) {
 	for _, tc := range []struct {
 		text   string
 		number BlockNumber

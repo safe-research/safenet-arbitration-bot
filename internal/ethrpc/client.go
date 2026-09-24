@@ -31,6 +31,14 @@ func (c *Client) Call(ctx context.Context, call CallRequest, block BlockNumber) 
 	return result, err
 }
 
+// BlockNumber returns the number of the node's most recent block
+// (eth_blockNumber).
+func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
+	var result BlockNumber
+	err := c.request(ctx, &result, "eth_blockNumber")
+	return result, err
+}
+
 type request struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      uint64 `json:"id"`

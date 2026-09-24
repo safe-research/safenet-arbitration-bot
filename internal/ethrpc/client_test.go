@@ -137,6 +137,21 @@ func TestCallRPCError(t *testing.T) {
 	}
 }
 
+func TestBlockNumber(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_blockNumber", "params": []}`,
+		`{"result": "0x2625a00"}`,
+	)
+
+	number, err := client.BlockNumber(t.Context())
+	if err != nil {
+		t.Fatalf("BlockNumber: %v", err)
+	}
+	if number != 40_000_000 {
+		t.Errorf("BlockNumber: got %d, want 40000000", number)
+	}
+}
+
 func TestRequestHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
