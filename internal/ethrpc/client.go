@@ -5,22 +5,80 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 // Client sends JSON-RPC requests to a single Ethereum node over HTTP.
 type Client struct {
-	url  string
-	http *http.Client
-	id   atomic.Uint64
+	chainID uint64
+	url     string
+	http    *http.Client
+	id      atomic.Uint64
 }
 
-// NewClient returns a client for the node at url.
-func NewClient(url string) *Client {
-	return &Client{url: url, http: http.DefaultClient}
+// connectTimeout bounds how long NewClient waits for each default RPC node to
+// report its chain ID, so that one unresponsive node doesn't stall it.
+var connectTimeout = 1 * time.Second
+
+// NewClient returns a client for the chain with the given ID, using the node
+// at url. If url is empty, the client uses the chain's default RPC URLs (see
+// DefaultRPCs): it tries them one at a time, in order, and uses the first node
+// that answers with the expected chain ID.
+//
+// It checks that the node serves the expected chain (eth_chainId), since the
+// node may come from an untrusted list, and chains share contract addresses
+// and call encodings, so a wrong chain would go unnoticed otherwise.
+func NewClient(ctx context.Context, chainID uint64, url string) (*Client, error) {
+	if url != "" {
+		c := &Client{chainID: chainID, url: url, http: http.DefaultClient}
+		if err := c.checkChainID(ctx); err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+
+	urls, err := DefaultRPCs(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	var errs []error
+	for _, url := range urls {
+		c := &Client{chainID: chainID, url: url, http: http.DefaultClient}
+		checkCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+		err := c.checkChainID(checkCtx)
+		cancel()
+		if err == nil {
+			return c, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		errs = append(errs, err)
+	}
+	return nil, fmt.Errorf("no default RPC node for chain %d: %w", chainID, errors.Join(errs...))
+}
+
+// checkChainID returns an error unless the client's node serves the client's
+// chain.
+func (c *Client) checkChainID(ctx context.Context) error {
+	var chainID Quantity
+	if err := c.request(ctx, &chainID, "eth_chainId"); err != nil {
+		return fmt.Errorf("%s: %w", c.url, err)
+	}
+	if uint64(chainID) != c.chainID {
+		return fmt.Errorf("%s: serves chain %d, want chain %d", c.url, chainID, c.chainID)
+	}
+	return nil
+}
+
+// ChainID returns the ID of the chain that the client's node serves.
+func (c *Client) ChainID() uint64 {
+	return c.chainID
 }
 
 // Call executes a message call against the state at the given block without

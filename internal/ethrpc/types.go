@@ -62,24 +62,35 @@ func (b *Bytes) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// Quantity is an unsigned integer, encoded as a hex quantity.
+type Quantity uint64
+
+func (q Quantity) MarshalText() ([]byte, error) {
+	return []byte("0x" + strconv.FormatUint(uint64(q), 16)), nil
+}
+
+func (q *Quantity) UnmarshalText(text []byte) error {
+	digits, ok := strings.CutPrefix(string(text), "0x")
+	if !ok || digits == "" {
+		return fmt.Errorf("invalid quantity %q: not 0x-prefixed hex", text)
+	}
+	value, err := strconv.ParseUint(digits, 16, 64)
+	if err != nil {
+		return fmt.Errorf("invalid quantity %q: %w", text, err)
+	}
+	*q = Quantity(value)
+	return nil
+}
+
 // BlockNumber is a block number, encoded as a hex quantity.
 type BlockNumber uint64
 
 func (n BlockNumber) MarshalText() ([]byte, error) {
-	return []byte("0x" + strconv.FormatUint(uint64(n), 16)), nil
+	return Quantity(n).MarshalText()
 }
 
 func (n *BlockNumber) UnmarshalText(text []byte) error {
-	digits, ok := strings.CutPrefix(string(text), "0x")
-	if !ok || digits == "" {
-		return fmt.Errorf("invalid block number %q: not a 0x-prefixed hex quantity", text)
-	}
-	value, err := strconv.ParseUint(digits, 16, 64)
-	if err != nil {
-		return fmt.Errorf("invalid block number %q: %w", text, err)
-	}
-	*n = BlockNumber(value)
-	return nil
+	return (*Quantity)(n).UnmarshalText(text)
 }
 
 // CallRequest is the message call object passed to eth_call.

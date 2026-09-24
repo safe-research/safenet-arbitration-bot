@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
-// serve starts a JSON-RPC server that checks each request against want and
-// answers with the JSON response object reply, with the request's ID filled
-// in.
+// testChainID is the chain that test nodes started by serve report.
+const testChainID = 1
+
+// serve starts a JSON-RPC server for testChainID that checks each request
+// against want and answers with the JSON response object reply, with the
+// request's ID filled in. It answers the client's eth_chainId check itself.
 func serve(t *testing.T, want, reply string) *Client {
 	t.Helper()
 	wantRequest := canonical(t, want)
@@ -35,6 +38,10 @@ func serve(t *testing.T, want, reply string) *Client {
 			return
 		}
 		id := req["id"]
+		if req["method"] == "eth_chainId" {
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": "0x1"})
+			return
+		}
 		delete(req, "id")
 		if got, _ := json.Marshal(req); string(got) != wantRequest {
 			t.Errorf("request:\n got %s\nwant %s", got, wantRequest)
@@ -44,7 +51,11 @@ func serve(t *testing.T, want, reply string) *Client {
 		json.NewEncoder(w).Encode(response)
 	}))
 	t.Cleanup(server.Close)
-	return NewClient(server.URL)
+	client, err := NewClient(t.Context(), testChainID, server.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
 }
 
 func decode(t *testing.T, s string) map[string]any {
@@ -152,24 +163,102 @@ func TestBlockNumber(t *testing.T) {
 	}
 }
 
-func TestRequestHTTPError(t *testing.T) {
+// node starts a JSON-RPC server that reports chainID to eth_chainId, and
+// passes every other request to handle. It returns the server's URL and a count
+// of the eth_chainId requests it has served.
+func node(t *testing.T, chainID string, handle func(w http.ResponseWriter, id uint64)) (string, *atomic.Int64) {
+	t.Helper()
+	var chainIDRequests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		var req struct {
+			ID     uint64 `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Method == "eth_chainId" {
+			chainIDRequests.Add(1)
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": chainID})
+			return
+		}
+		handle(w, req.ID)
 	}))
 	t.Cleanup(server.Close)
+	return server.URL, &chainIDRequests
+}
 
-	if _, err := NewClient(server.URL).Call(t.Context(), CallRequest{}, 1); err == nil {
+// connect returns a client for the node at url, expecting testChainID.
+func connect(t *testing.T, url string) *Client {
+	t.Helper()
+	client, err := NewClient(t.Context(), testChainID, url)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
+}
+
+func TestRequestHTTPError(t *testing.T) {
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	})
+	if _, err := connect(t, url).Call(t.Context(), CallRequest{}, 1); err == nil {
 		t.Fatal("Call: expected an error")
 	}
 }
 
 func TestRequestMismatchedID(t *testing.T) {
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id + 1000, "result": "0x"})
+	})
+	if _, err := connect(t, url).Call(t.Context(), CallRequest{}, 1); err == nil {
+		t.Fatal("Call: expected an error")
+	}
+}
+
+func TestNewClientVerifiesChainID(t *testing.T) {
+	var requests atomic.Int64
+	url, chainIDRequests := node(t, "0x64", func(w http.ResponseWriter, id uint64) {
+		requests.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": "0x2a"})
+	})
+
+	client, err := NewClient(t.Context(), 100, url)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if client.ChainID() != 100 {
+		t.Errorf("ChainID: got %d, want 100", client.ChainID())
+	}
+	for range 3 {
+		if _, err := client.BlockNumber(t.Context()); err != nil {
+			t.Fatalf("BlockNumber: %v", err)
+		}
+	}
+	if n := chainIDRequests.Load(); n != 1 {
+		t.Errorf("eth_chainId requests: got %d, want 1", n)
+	}
+	if n := requests.Load(); n != 3 {
+		t.Errorf("eth_blockNumber requests: got %d, want 3", n)
+	}
+}
+
+func TestNewClientRejectsWrongChain(t *testing.T) {
+	url, _ := node(t, "0x64", func(w http.ResponseWriter, id uint64) {
+		t.Error("unexpected request to a node on the wrong chain")
+	})
+	if _, err := NewClient(t.Context(), 1, url); err == nil {
+		t.Fatal("NewClient: expected an error")
+	}
+}
+
+func TestNewClientConnectionError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"jsonrpc": "2.0", "id": 1000, "result": "0x"}`)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(server.Close)
-
-	if _, err := NewClient(server.URL).Call(t.Context(), CallRequest{}, 1); err == nil {
-		t.Fatal("Call: expected an error")
+	if _, err := NewClient(t.Context(), testChainID, server.URL); err == nil {
+		t.Fatal("NewClient: expected an error")
 	}
 }
