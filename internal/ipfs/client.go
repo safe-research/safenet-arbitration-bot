@@ -19,6 +19,8 @@ const MaxContentSize = 2 << 20
 
 // Client fetches content from an IPFS HTTP gateway, caching it on disk.
 type Client struct {
+	// gateway is the gateway base URL. An empty string means the default
+	// gateway.
 	gateway string
 	http    *http.Client
 	// cache is the directory holding cached content, one file per CID. An
@@ -27,8 +29,9 @@ type Client struct {
 }
 
 // NewClient returns a client for the HTTP gateway at the base URL gateway,
-// such as "https://gateway.pinata.cloud". Content is cached in
-// $XDG_CACHE_HOME/arbot/ipfs.
+// such as "https://ipfs.filebase.io". If gateway is empty, the client uses the
+// default gateway (see DefaultGateway), resolved the first time it needs to
+// download content. Content is cached in $XDG_CACHE_HOME/arbot/ipfs.
 func NewClient(gateway string) *Client {
 	var cache string
 	if dir := xdg.CacheHome(); dir != "" {
@@ -95,7 +98,14 @@ func (c *Client) store(cid CID, content []byte) error {
 
 // download fetches the content for cid from the gateway and verifies it.
 func (c *Client) download(ctx context.Context, cid CID) ([]byte, error) {
-	u, err := url.JoinPath(c.gateway, "ipfs", cid.String())
+	gateway := c.gateway
+	if gateway == "" {
+		var err error
+		if gateway, err = DefaultGateway(ctx); err != nil {
+			return nil, err
+		}
+	}
+	u, err := url.JoinPath(gateway, "ipfs", cid.String())
 	if err != nil {
 		return nil, err
 	}
