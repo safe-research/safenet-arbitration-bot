@@ -56,7 +56,8 @@ The effective Charter is the IPFS document referenced by the ENS name `charter.s
 1. **The bot holds no keys and never writes onchain.** It only produces drafts. Humans on the Council review a draft and submit the ruling through the Arbitrator Safe.
 2. **Deterministic rules live in Go code, not prompts.** A deterministic check returns either `insecure` with a rule citation or `abstain`. It never returns `secure`, because passing one rule says nothing about the others (§ 3.7). Any `secure` outcome comes from the LLM stage and is reviewed by a human.
 3. **LLM output is always a draft.** It must cite rules, name the precedents it applied or distinguished, and meet the ruling-explanation requirements of § 5.2: Safe and network, Charter version, rule IDs, material evidence, and the reason. Only admissible evidence may be used (§ 3.3–3.5).
-4. **Sane defaults, no required configuration.** RPC URLs come from <https://chainlist.org/rpcs.json>. IPFS content (Charter versions, `context` CIDs) is fetched through public gateways. Overrides may exist, but no command may require them.
+4. **Sane defaults, no required configuration.** RPC URLs come from <https://chainlist.org/rpcs.json>. IPFS content (Charter versions, `context` CIDs) is fetched through public gateways. Overrides may exist, but no command may require them. Overrides go in an optional JSON configuration file, loaded by `internal/config` from `--config`, `./arbot.config.json`, or `$XDG_CONFIG_HOME/arbot/config.json`, in that order. A missing file means the defaults apply.
+5. **Go standard library only, as far as reasonably possible.** Do not add third-party modules for things the standard library makes easy to write. For example, write the Ethereum JSON-RPC client, ABI encoding and decoding, and IPFS/ENS lookups by hand on top of `net/http` and `encoding/json` rather than pulling in `go-ethereum`. A dependency is only justified for something that is impractical or risky to reimplement. Keccak-256 is one such case: the standard library's `crypto/sha3` does not provide it. Even then, prefer `golang.org/x/...` modules and keep them few.
 
 ### Components (planned)
 
@@ -100,15 +101,4 @@ The body follows the header. It contains the decoded transaction, the sentinel v
 
 ## Development
 
-Repo-wide commands are recipes in the [Justfile](./Justfile). Go builds `arbot`, and Node.js runs Prettier, which formats Markdown using the settings in `.prettierrc`.
-
-```sh
-just fix                                     # gofmt + prettier --write
-just check                                   # gofmt check, go vet, prettier --check
-go build ./...
-go test ./...
-go test ./internal/<pkg> -run '^TestName$'   # single test
-go run ./cmd/arbot --help
-```
-
-Run `just fix`, `just check`, and the tests before committing. Tests that need chain access should run against pinned blocks so their results stay reproducible.
+Development commands are recipes in the [Justfile](./Justfile); run `just --list` to see them. Run `just precommit` before committing.
