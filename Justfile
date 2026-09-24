@@ -18,6 +18,7 @@ arbot *args:
 check:
     gofmt -d -l .
     go vet ./...
+    go run ./internal/cmd/golines
     {{prettier}} --check "**/*.md"
 
 # Auto-fix formatting issues.
