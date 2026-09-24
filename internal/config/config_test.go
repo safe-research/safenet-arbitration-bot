@@ -3,8 +3,10 @@ package config
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -29,24 +31,51 @@ func write(t *testing.T, path, contents string) {
 	}
 }
 
+// writeSource writes a configuration file to path whose Mainnet RPC URL names
+// source, so that tests can tell which file Load picked.
+func writeSource(t *testing.T, path, source string) {
+	t.Helper()
+	write(t, path, `{"rpcs": {"1": "https://`+source+`.example"}}`)
+}
+
+// loadSource loads the configuration from path, and returns the source name
+// that writeSource put in it, or an empty string for the default
+// configuration.
+func loadSource(t *testing.T, path string) string {
+	t.Helper()
+	config, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	url, ok := config.RPCs[1]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(url, "https://"), ".example")
+}
+
 func TestLoadDefaultsWithoutFile(t *testing.T) {
 	setup(t)
-	if _, err := Load(""); err != nil {
-		t.Fatalf("Load: %v", err)
+	if source := loadSource(t, ""); source != "" {
+		t.Errorf("Load: got configuration from %q, want the default configuration", source)
 	}
 }
 
 func TestLoadExplicitPath(t *testing.T) {
-	cwd, _, _ := setup(t)
+	cwd, _, xdg := setup(t)
+	writeSource(t, filepath.Join(cwd, "arbot.config.json"), "cwd")
+	writeSource(t, filepath.Join(xdg, "arbot", "config.json"), "xdg")
 	path := filepath.Join(cwd, "custom.json")
-	write(t, path, `{}`)
-	if _, err := Load(path); err != nil {
-		t.Fatalf("Load: %v", err)
+	writeSource(t, path, "explicit")
+
+	if source := loadSource(t, path); source != "explicit" {
+		t.Errorf("Load: got configuration from %q, want %q", source, "explicit")
 	}
 }
 
 func TestLoadExplicitPathMustExist(t *testing.T) {
-	setup(t)
+	cwd, _, _ := setup(t)
+	writeSource(t, filepath.Join(cwd, "arbot.config.json"), "cwd")
 	_, err := Load("missing.json")
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("Load: got %v, want %v", err, fs.ErrNotExist)
@@ -55,25 +84,24 @@ func TestLoadExplicitPathMustExist(t *testing.T) {
 
 func TestLoadSearchOrder(t *testing.T) {
 	cwd, _, xdg := setup(t)
-	write(t, filepath.Join(xdg, "arbot", "config.json"), `{}`)
-	if _, err := Load(""); err != nil {
-		t.Fatalf("Load from $XDG_CONFIG_HOME: %v", err)
+	writeSource(t, filepath.Join(xdg, "arbot", "config.json"), "xdg")
+	if source := loadSource(t, ""); source != "xdg" {
+		t.Errorf("Load: got configuration from %q, want %q", source, "xdg")
 	}
 
-	// A file in the working directory takes precedence, so its error shows
-	// that it was picked over the valid one in $XDG_CONFIG_HOME.
-	write(t, filepath.Join(cwd, "arbot.config.json"), `invalid`)
-	if _, err := Load(""); err == nil {
-		t.Fatal("Load: expected the working directory file to be used")
+	// A file in the working directory takes precedence.
+	writeSource(t, filepath.Join(cwd, "arbot.config.json"), "cwd")
+	if source := loadSource(t, ""); source != "cwd" {
+		t.Errorf("Load: got configuration from %q, want %q", source, "cwd")
 	}
 }
 
 func TestLoadXDGDefaultsToHomeConfig(t *testing.T) {
 	_, home, _ := setup(t)
 	t.Setenv("XDG_CONFIG_HOME", "")
-	write(t, filepath.Join(home, ".config", "arbot", "config.json"), `invalid`)
-	if _, err := Load(""); err == nil {
-		t.Fatal("Load: expected ~/.config/arbot/config.json to be used")
+	writeSource(t, filepath.Join(home, ".config", "arbot", "config.json"), "home")
+	if source := loadSource(t, ""); source != "home" {
+		t.Errorf("Load: got configuration from %q, want %q", source, "home")
 	}
 }
 
@@ -91,5 +119,35 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 				t.Fatal("Load: expected an error")
 			}
 		})
+	}
+}
+
+func TestLoadSettings(t *testing.T) {
+	cwd, _, _ := setup(t)
+	path := filepath.Join(cwd, "arbot.config.json")
+	write(t, path, `{
+		"rpcs": {"1": "https://mainnet.example", "100": "https://gnosis.example"},
+		"ipfs": "https://ipfs.example"
+	}`)
+
+	config, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := Config{
+		RPCs: map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
+		IPFS: "https://ipfs.example",
+	}
+	if !maps.Equal(config.RPCs, want.RPCs) || config.IPFS != want.IPFS {
+		t.Errorf("Load: got %+v, want %+v", config, want)
+	}
+}
+
+func TestLoadRejectsInvalidChainID(t *testing.T) {
+	cwd, _, _ := setup(t)
+	path := filepath.Join(cwd, "arbot.config.json")
+	write(t, path, `{"rpcs": {"mainnet": "https://mainnet.example"}}`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load: expected an error")
 	}
 }

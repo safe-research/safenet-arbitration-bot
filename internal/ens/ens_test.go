@@ -107,7 +107,7 @@ func mainnet(t *testing.T, calls map[string]string) *Client {
 	}))
 	t.Cleanup(server.Close)
 
-	eth, err := ethrpc.NewClient(t.Context(), Mainnet, server.URL)
+	eth, err := ethrpc.NewClient(t.Context(), ethrpc.Mainnet, server.URL)
 	if err != nil {
 		t.Fatalf("ethrpc.NewClient: %v", err)
 	}

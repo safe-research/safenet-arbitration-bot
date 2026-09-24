@@ -15,10 +15,7 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/keccak256"
 )
 
-// Mainnet is the chain ID of Ethereum Mainnet, where the ENS registry lives.
-const Mainnet = 1
-
-// Registry is the address of the ENS registry.
+// Registry is the address of the ENS registry on Ethereum Mainnet.
 var Registry = mustParseAddress("0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e")
 
 // Function selectors of the registry and resolver methods that Resolve calls.
@@ -35,7 +32,7 @@ type Client struct {
 // NewClient returns a client that resolves names using eth, which must be a
 // client for Ethereum Mainnet.
 func NewClient(eth *ethrpc.Client) (*Client, error) {
-	if eth.ChainID() != Mainnet {
+	if eth.ChainID() != ethrpc.Mainnet {
 		return nil, fmt.Errorf("ENS requires an Ethereum Mainnet node, got chain %d", eth.ChainID())
 	}
 	return &Client{eth: eth}, nil

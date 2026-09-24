@@ -17,7 +17,15 @@ import (
 )
 
 // Config is the Arbot configuration.
-type Config struct{}
+type Config struct {
+	// RPCs maps chain IDs to the RPC URLs to use for them, such as
+	// {"1": "https://ethereum-rpc.publicnode.com"}. Chains without an entry
+	// use a public RPC from Chainlist.
+	RPCs map[uint64]string `json:"rpcs"`
+	// IPFS is the base URL of the IPFS HTTP gateway to use, such as
+	// "https://ipfs.filebase.io". If empty, a public gateway is used.
+	IPFS string `json:"ipfs"`
+}
 
 // Load reads the configuration file at path. If path is empty, it uses the
 // first file that exists out of:
