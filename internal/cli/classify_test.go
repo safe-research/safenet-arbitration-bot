@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,11 +29,7 @@ func TestClassify(t *testing.T) {
 		"proposal": {"transaction": {"chainId": 100, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0, "nonce": 0}}
 	}`)
 
-	// The list is that of the checks package, one per line or as JSON.
-	var listText string
-	for _, c := range checks.List() {
-		listText += c.String() + "\n"
-	}
+	// The list is that of the checks package, as a table or as JSON.
 	listJSON, err := json.MarshalIndent(checks.List(), "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +50,6 @@ func TestClassify(t *testing.T) {
 		{[]string{"-request-file", filepath.Join(dir, "missing.json")}, 1, "", "no such file"},
 		{[]string{"-request-file", request, "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 		{[]string{}, 2, "", "Usage:"},
-		{[]string{"-list"}, 0, listText, ""},
 		{[]string{"-json", "-list"}, 0, string(listJSON) + "\n", ""},
 		{[]string{"-list", "-request-file", request}, 2, "", "mutually exclusive"},
 		{[]string{"-list", "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
@@ -65,5 +62,34 @@ func TestClassify(t *testing.T) {
 			t.Errorf("classify %v: got status %d, stdout %q, stderr %q; want %d, %q, and stderr containing %q",
 				test.args, code, stdout.String(), stderr.String(), test.code, test.stdout, test.stderr)
 		}
+	}
+}
+
+func TestClassifyList(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(config, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(t.Context(), []string{"arbot", "-config", config, "classify", "-list"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("classify -list: got status %d, stderr %q", code, stderr.String())
+	}
+
+	// The table has a row for each check, in the order that they run, with its
+	// columns separated by at least two spaces.
+	want := [][]string{{"VERDICT", "RULE", "DESCRIPTION"}}
+	for _, c := range checks.List() {
+		rule := c.Rule
+		if rule == "" {
+			rule = "-"
+		}
+		want = append(want, []string{c.Verdict.String(), rule, c.Description})
+	}
+	var got [][]string
+	for line := range strings.Lines(stdout.String()) {
+		got = append(got, regexp.MustCompile(`  +`).Split(strings.TrimSuffix(line, "\n"), -1))
+	}
+	if !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("classify -list: got rows %q, want %q", got, want)
 	}
 }

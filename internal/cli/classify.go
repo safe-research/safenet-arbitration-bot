@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"text/tabwriter"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/checks"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -65,17 +66,21 @@ func classify(ctx context.Context, e *env, args []string) error {
 	return err
 }
 
-// listChecks writes the classification of each check, one per line or as a JSON
-// array, in the order that the checks run.
+// listChecks writes the classification of each check, as a table or as a JSON
+// array, in the order that the checks run. The table has "-" for an empty rule.
 func listChecks(e *env, asJSON bool) error {
 	list := checks.List()
 	if asJSON {
 		return writeJSON(e.stdout, list)
 	}
+	w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "VERDICT\tRULE\tDESCRIPTION")
 	for _, c := range list {
-		if _, err := fmt.Fprintln(e.stdout, c); err != nil {
-			return err
+		rule := c.Rule
+		if rule == "" {
+			rule = "-"
 		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", c.Verdict, rule, c.Description)
 	}
-	return nil
+	return w.Flush()
 }
