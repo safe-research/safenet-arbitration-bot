@@ -26,8 +26,8 @@ type Config struct {
 	// IPFS is the base URL of the IPFS HTTP gateway to use, such as
 	// "https://ipfs.filebase.io". If empty, a public gateway is used.
 	IPFS string `json:"ipfs"`
-	// Oracle is the address of the SentinelOracle contract on Gnosis Chain to
-	// read Safenet requests from. If zero, the default deployment is used.
+	// Oracle is the address of the SentinelOracle contract on Gnosis Chain to read
+	// Safenet requests from. If zero, the default deployment is used.
 	Oracle ethrpc.Address `json:"oracle"`
 }
 

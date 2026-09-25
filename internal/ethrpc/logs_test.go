@@ -10,9 +10,9 @@ import (
 )
 
 // logNode starts a JSON-RPC server that serves eth_getLogs for ranges of at
-// most limit blocks, with one log in each of the given blocks, and rejects wider
-// ranges with an HTTP error status and a JSON-RPC error. It records the block
-// ranges it is asked for.
+// most limit blocks, with one log in each of the given blocks, and rejects
+// wider ranges with an HTTP error status and a JSON-RPC error. It records the
+// block ranges it is asked for.
 func logNode(t *testing.T, limit uint64, blocks ...BlockNumber) (*Client, *[][2]BlockNumber) {
 	t.Helper()
 	var ranges [][2]BlockNumber

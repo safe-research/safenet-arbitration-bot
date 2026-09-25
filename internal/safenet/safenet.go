@@ -119,11 +119,11 @@ func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Disp
 
 // Request returns the request with the given ID as of block: the oracle's
 // record of it, the transaction proposal it is for, the sentinels' votes, and
-// its arbitration. It returns an error wrapping ErrRequestNotFound if the oracle
-// has no request with the ID.
+// its arbitration. It returns an error wrapping ErrRequestNotFound if the
+// oracle has no request with the ID.
 //
-// The proposal is taken from the Consensus logs, and only accepted if hashing it
-// gives both the logged Safe transaction hash and the request ID.
+// The proposal is taken from the Consensus logs, and only accepted if hashing
+// it gives both the logged Safe transaction hash and the request ID.
 func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, error) {
 	request, progress, err := s.getRequest(ctx, id, block)
 	if err != nil {

@@ -13,8 +13,8 @@ type Dispute struct {
 	RequestID ethrpc.Hash `json:"requestId"`
 	// FrozenBlock is the block in which the request was frozen.
 	FrozenBlock uint64 `json:"frozenBlock"`
-	// Deadline is the last block in which the arbitrator can rule before anyone
-	// can time out the arbitration.
+	// Deadline is the last block in which the arbitrator can rule before anyone can
+	// time out the arbitration.
 	Deadline uint64 `json:"deadline"`
 }
 
@@ -44,13 +44,13 @@ type Terms struct {
 	Sponsor ethrpc.Address `json:"sponsor"`
 	// Bond is the amount that each sentinel bonds when committing a vote.
 	Bond *big.Int `json:"bond"`
-	// SlashAmount is the amount slashed from each sentinel on the losing side of
-	// a ruling, and from each sentinel that does not reveal its vote.
+	// SlashAmount is the amount slashed from each sentinel on the losing side of a
+	// ruling, and from each sentinel that does not reveal its vote.
 	SlashAmount *big.Int `json:"slashAmount"`
 	// DAOFeeShare is the DAO's share of the fee, in units of 1/100,000.
 	DAOFeeShare uint32 `json:"daoFeeShare"`
-	// CommitDeadline and RevealDeadline are the last blocks in which sentinels
-	// can commit and reveal their votes.
+	// CommitDeadline and RevealDeadline are the last blocks in which sentinels can
+	// commit and reveal their votes.
 	CommitDeadline uint64 `json:"commitDeadline"`
 	RevealDeadline uint64 `json:"revealDeadline"`
 }
@@ -102,8 +102,8 @@ type Commitment struct {
 // Arbitration is the arbitration of a frozen request.
 type Arbitration struct {
 	FrozenBlock uint64 `json:"frozenBlock"`
-	// Deadline is the last block in which the arbitrator can rule before anyone
-	// can time out the arbitration.
+	// Deadline is the last block in which the arbitrator can rule before anyone can
+	// time out the arbitration.
 	Deadline uint64  `json:"deadline"`
 	Outcome  Outcome `json:"outcome"`
 	// Slashed is the total amount slashed from the losing side of a secure or
@@ -189,8 +189,8 @@ const (
 	// OutcomePending means that the arbitrator hasn't ruled yet, and the
 	// arbitration hasn't timed out.
 	OutcomePending Outcome = "pending"
-	// OutcomeSecure and OutcomeInsecure are rulings that the transaction is
-	// secure (the approving sentinels win) or insecure (the denying ones win).
+	// OutcomeSecure and OutcomeInsecure are rulings that the transaction is secure
+	// (the approving sentinels win) or insecure (the denying ones win).
 	OutcomeSecure   Outcome = "secure"
 	OutcomeInsecure Outcome = "insecure"
 	// OutcomeOutOfScope means that the arbitrator declined to rule.

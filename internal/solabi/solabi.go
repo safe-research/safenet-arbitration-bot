@@ -115,7 +115,8 @@ func (d *Decoder) Uint(i int) *big.Int {
 	return new(big.Int).SetBytes(w)
 }
 
-// Uint64 returns the i-th value as an unsigned integer that must fit in 64 bits.
+// Uint64 returns the i-th value as an unsigned integer that must fit in 64
+// bits.
 func (d *Decoder) Uint64(i int) uint64 {
 	return d.uint64(d.head(i), fmt.Sprintf("value %d", i))
 }

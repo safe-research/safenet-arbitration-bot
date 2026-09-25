@@ -155,8 +155,8 @@ func (c *Client) request(ctx context.Context, result any, method string, params 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Some nodes reject requests with an HTTP error status and a JSON-RPC error
-		// in the body, such as for a block range that is too large.
+		// Some nodes reject requests with an HTTP error status and a JSON-RPC error in
+		// the body, such as for a block range that is too large.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		var res response
 		if json.Unmarshal(body, &res) == nil && res.Error != nil {
