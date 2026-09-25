@@ -134,8 +134,6 @@ func classify(ctx context.Context, checks []check, request *safenet.Request) (Cl
 		}
 	}
 
-	// A transaction that makes no calls has no descriptions, and stays
-	// unclassified.
 	var descriptions []string
 	for _, call := range tx.calls {
 		i, err := firstMatch(ctx, checks[secure:], &tx.safe, call)
@@ -145,9 +143,6 @@ func classify(ctx context.Context, checks []check, request *safenet.Request) (Cl
 		if d := checks[secure+i].description; !slices.Contains(descriptions, d) {
 			descriptions = append(descriptions, d)
 		}
-	}
-	if len(descriptions) == 0 {
-		return Classification{}, nil
 	}
 	return Classification{Verdict: Secure, Description: strings.Join(descriptions, "; ")}, nil
 }

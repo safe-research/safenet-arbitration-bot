@@ -19,8 +19,8 @@ func TestSafeTransactionHash(t *testing.T) {
 	// The vector from the Safenet explorer's hashing tests.
 	tx := SafeTransaction{
 		ChainID:   big.NewInt(100),
-		Safe:      mustParseAddress("0x779720809250AF7931935a192FCD007479C41299"),
-		To:        mustParseAddress("0x2dC63c83040669F0aDBa5F832F713152bA862c97"),
+		Safe:      ethrpc.MustParseAddress("0x779720809250AF7931935a192FCD007479C41299"),
+		To:        ethrpc.MustParseAddress("0x2dC63c83040669F0aDBa5F832F713152bA862c97"),
 		Value:     big.NewInt(100_000_000_000_000_000),
 		Operation: OperationCall,
 		SafeTxGas: new(big.Int),

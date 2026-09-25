@@ -12,9 +12,9 @@ import (
 // transactionComponents are the parts of a Safe transaction that checks judge.
 type transactionComponents struct {
 	safe safeID
-	// calls are the calls that the Safe makes, followed by a synthetic call that
-	// pays the largest gas refund that the transaction allows, if it has one. See
-	// gasRefund.
+	// calls are the calls that the Safe makes, as expandTransactionCalls returns
+	// them, followed by a synthetic call that pays the largest gas refund that the
+	// transaction allows, if it has one. See gasRefund.
 	calls []call
 }
 
@@ -50,11 +50,12 @@ func components(tx *safenet.SafeTransaction) (*transactionComponents, error) {
 			return nil, fmt.Errorf("safe transaction has no %s", amount.name)
 		}
 	}
-	calls := []call{{to: tx.To, value: tx.Value, data: tx.Data, operation: tx.Operation}}
+	safe := safeID{address: tx.Safe, chainID: tx.ChainID}
+	calls := expandTransactionCalls(tx)
 	if refund, ok := gasRefund(tx); ok {
 		calls = append(calls, refund)
 	}
-	return &transactionComponents{safe: safeID{address: tx.Safe, chainID: tx.ChainID}, calls: calls}, nil
+	return &transactionComponents{safe: safe, calls: calls}, nil
 }
 
 // transferSelector is the selector of ERC-20's transfer(address,uint256), with

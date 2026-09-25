@@ -51,7 +51,7 @@ import (
 var progname = filepath.Base(os.Args[0])
 
 // weth9 is the address of WETH9 on Ethereum Mainnet.
-var weth9 = mustParseAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+var weth9 = ethrpc.MustParseAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
 // The Consensus epoch and coordinator group that the artifacts set up. Group
 // IDs have their low 64 bits clear, as signature IDs keep the sequence there.
@@ -61,16 +61,16 @@ var groupID = solabi.Uint(new(big.Int).Lsh(big.NewInt(1), 64))
 
 // sentinels are the sentinels that the artifacts register with the oracle.
 var sentinels = []ethrpc.Address{
-	mustParseAddress("0x5e00000000000000000000000000000000000001"),
-	mustParseAddress("0x5e00000000000000000000000000000000000002"),
-	mustParseAddress("0x5e00000000000000000000000000000000000003"),
+	ethrpc.MustParseAddress("0x5e00000000000000000000000000000000000001"),
+	ethrpc.MustParseAddress("0x5e00000000000000000000000000000000000002"),
+	ethrpc.MustParseAddress("0x5e00000000000000000000000000000000000003"),
 }
 
 // The oracle configuration that the artifacts set up. The DAO fee share is in
 // units of 1/100,000.
 var (
 	fee                   = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-	protocolFundsReceiver = mustParseAddress("0xfee0000000000000000000000000000000000001")
+	protocolFundsReceiver = ethrpc.MustParseAddress("0xfee0000000000000000000000000000000000001")
 )
 
 const (
@@ -318,14 +318,6 @@ func shortString(s string) ethrpc.Hash {
 func offset(s ethrpc.Hash, i uint64) ethrpc.Hash {
 	sum := new(big.Int).SetBytes(s[:])
 	return solabi.Uint(sum.Add(sum, new(big.Int).SetUint64(i)))
-}
-
-func mustParseAddress(s string) ethrpc.Address {
-	address, err := ethrpc.ParseAddress(s)
-	if err != nil {
-		panic(err)
-	}
-	return address
 }
 
 func mustParseHash(s string) ethrpc.Hash {

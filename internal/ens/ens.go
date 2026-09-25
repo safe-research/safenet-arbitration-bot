@@ -17,7 +17,7 @@ import (
 )
 
 // Registry is the address of the ENS registry on Ethereum Mainnet.
-var Registry = mustParseAddress("0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e")
+var Registry = ethrpc.MustParseAddress("0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e")
 
 // Function selectors of the registry and resolver methods that Resolve calls.
 var (
@@ -155,12 +155,4 @@ func decodeContentHash(contenthash []byte) (string, error) {
 		return "", fmt.Errorf("unsupported content hash 0x%x: not a CIDv1", contenthash)
 	}
 	return "ipfs://b" + base32Lower.EncodeToString(cid), nil
-}
-
-func mustParseAddress(s string) ethrpc.Address {
-	address, err := ethrpc.ParseAddress(s)
-	if err != nil {
-		panic(err)
-	}
-	return address
 }

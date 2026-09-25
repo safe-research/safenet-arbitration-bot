@@ -23,6 +23,16 @@ func ParseAddress(s string) (Address, error) {
 	return a, err
 }
 
+// MustParseAddress is like ParseAddress, but panics if s is not an address. It
+// is for addresses in the source code.
+func MustParseAddress(s string) Address {
+	a, err := ParseAddress(s)
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
 // String returns the address as 0x-prefixed hex, with the EIP-55 checksum in
 // the case of its letters.
 func (a Address) String() string {
