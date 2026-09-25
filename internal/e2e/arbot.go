@@ -2,69 +2,57 @@ package e2e
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/safe-research/safenet-arbitration-bot/internal/cli"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
-// arbotPackage is the import path of the arbot command.
-const arbotPackage = "github.com/safe-research/safenet-arbitration-bot/cmd/arbot"
-
-// Arbot runs a built arbot binary, configured to read Gnosis Chain from a node.
+// Arbot runs arbot in the test's process, configured to read Gnosis Chain from
+// a node. As the test imports arbot's implementation, changing it invalidates
+// the test's cached results.
 type Arbot struct {
-	path   string
 	config string
 }
 
-// BuildArbot builds arbot, configured to read Gnosis Chain from the node.
-func BuildArbot(tb testing.TB, node *Anvil) *Arbot {
+// NewArbot returns an Arbot configured to read Gnosis Chain from the node.
+func NewArbot(tb testing.TB, node *Anvil) *Arbot {
 	tb.Helper()
-	dir := tb.TempDir()
-	path := filepath.Join(dir, "arbot")
-	if out, err := exec.Command("go", "build", "-o", path, arbotPackage).CombinedOutput(); err != nil {
-		tb.Fatalf("building arbot: %v\n%s", err, out)
-	}
-	config := filepath.Join(dir, "config.json")
+	config := filepath.Join(tb.TempDir(), "config.json")
 	data := fmt.Sprintf(`{"rpcs": {"%d": %q}}`, ethrpc.Gnosis, node.URL)
 	if err := os.WriteFile(config, []byte(data), 0o644); err != nil {
 		tb.Fatal(err)
 	}
-	return &Arbot{path: path, config: config}
+	return &Arbot{config: config}
 }
 
 // Run runs arbot with args, and returns its stdout. It fails the test if arbot
 // fails.
 func (a *Arbot) Run(tb testing.TB, args ...string) []byte {
 	tb.Helper()
-	var stderr bytes.Buffer
-	cmd := a.command(args)
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		tb.Fatalf("arbot %v: %v\n%s", args, err, stderr.Bytes())
+	code, stdout, stderr := a.run(tb, args)
+	if code != 0 {
+		tb.Fatalf("arbot %v: exit status %d\n%s", args, code, stderr)
 	}
-	return out
+	return stdout
 }
 
 // Fail runs arbot with args, and returns its stderr. It fails the test unless
 // arbot exits with status code.
 func (a *Arbot) Fail(tb testing.TB, code int, args ...string) []byte {
 	tb.Helper()
-	var stderr bytes.Buffer
-	cmd := a.command(args)
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if exit, ok := errors.AsType[*exec.ExitError](err); !ok || exit.ExitCode() != code {
-		tb.Fatalf("arbot %v: got error %v, want exit status %d", args, err, code)
+	got, _, stderr := a.run(tb, args)
+	if got != code {
+		tb.Fatalf("arbot %v: got exit status %d, want %d\n%s", args, got, code, stderr)
 	}
-	return stderr.Bytes()
+	return stderr
 }
 
-func (a *Arbot) command(args []string) *exec.Cmd {
-	return exec.Command(a.path, append([]string{"-config", a.config}, args...)...)
+func (a *Arbot) run(tb testing.TB, args []string) (code int, stdout, stderr []byte) {
+	var out, errs bytes.Buffer
+	code = cli.Run(tb.Context(), append([]string{"arbot", "-config", a.config}, args...), &out, &errs)
+	return code, out.Bytes(), errs.Bytes()
 }

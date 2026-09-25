@@ -1,12 +1,9 @@
-package main
+package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"os"
 
-	"github.com/safe-research/safenet-arbitration-bot/internal/config"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ens"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ipfs"
@@ -17,21 +14,19 @@ import (
 const charterName = "charter.safenet-gov.eth"
 
 // charter fetches the Safenet Arbitration Charter and writes it to stdout.
-func charter(ctx context.Context, cfg config.Config, args []string) error {
-	flags := flag.NewFlagSet("charter", flag.ExitOnError)
+func charter(ctx context.Context, e *env, args []string) error {
+	flags := e.flagSet("charter")
 	block := flags.Uint64("block", 0, "Ethereum Mainnet block to read the Charter version at (default: latest)")
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: %s charter [flags]\n\n", progname)
+		fmt.Fprintf(flags.Output(), "Usage: %s charter [flags]\n\n", e.progname)
 		fmt.Fprintf(flags.Output(), "Fetches the Safenet Arbitration Charter referenced by %s and writes it to stdout.\n\n", charterName)
 		flags.PrintDefaults()
 	}
-	flags.Parse(args)
-	if flags.NArg() != 0 {
-		flags.Usage()
-		os.Exit(2)
+	if err := parse(flags, args, 0); err != nil {
+		return err
 	}
 
-	eth, err := ethrpc.NewClient(ctx, ethrpc.Mainnet, cfg.RPCs[ethrpc.Mainnet])
+	eth, err := ethrpc.NewClient(ctx, ethrpc.Mainnet, e.cfg.RPCs[ethrpc.Mainnet])
 	if err != nil {
 		return err
 	}
@@ -54,10 +49,10 @@ func charter(ctx context.Context, cfg config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	content, err := ipfs.NewClient(cfg.IPFS).Fetch(ctx, cid)
+	content, err := ipfs.NewClient(e.cfg.IPFS).Fetch(ctx, cid)
 	if err != nil {
 		return err
 	}
-	_, err = os.Stdout.Write(content)
+	_, err = e.stdout.Write(content)
 	return err
 }

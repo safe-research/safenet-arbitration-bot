@@ -34,11 +34,11 @@ type Testnet struct {
 }
 
 // NewTestnet starts anvil with the artifacts installed, and funds the sponsor,
-// the sentinels, and the arbitrator. It skips the test if anvil isn't
-// installed, or in short mode.
-func NewTestnet(tb testing.TB) *Testnet {
+// the sentinels, and the arbitrator. See StartAnvil for stateHistory. It skips
+// the test if anvil isn't installed, or in short mode.
+func NewTestnet(tb testing.TB, stateHistory int) *Testnet {
 	tb.Helper()
-	node := StartAnvil(tb)
+	node := StartAnvil(tb, stateHistory)
 	a := LoadArtifacts(tb)
 	node.Install(a)
 	n := &Testnet{Anvil: node, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}

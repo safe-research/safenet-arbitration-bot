@@ -1,41 +1,36 @@
-package main
+package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"text/tabwriter"
 	"time"
 
-	"github.com/safe-research/safenet-arbitration-bot/internal/config"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 )
 
 // info shows a Safenet request, its proposal, votes, and arbitration.
-func info(ctx context.Context, cfg config.Config, args []string) error {
-	flags := flag.NewFlagSet("info", flag.ExitOnError)
+func info(ctx context.Context, e *env, args []string) error {
+	flags := e.flagSet("info")
 	block := flags.Uint64("block", 0, "Gnosis Chain block to read at (default: latest)")
 	asJSON := flags.Bool("json", false, "write the request as JSON")
 	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: %s info [flags] <request-id>\n\n", progname)
+		fmt.Fprintf(flags.Output(), "Usage: %s info [flags] <request-id>\n\n", e.progname)
 		fmt.Fprintf(flags.Output(), "Shows a Safenet request, the transaction proposal it is for, the sentinels' votes, and its arbitration.\n\n")
 		flags.PrintDefaults()
 	}
-	flags.Parse(args)
-	if flags.NArg() != 1 {
-		flags.Usage()
-		os.Exit(2)
+	if err := parse(flags, args, 1); err != nil {
+		return err
 	}
 	id, err := ethrpc.ParseHash(flags.Arg(0))
 	if err != nil {
-		die(2, "request ID %q: %v", flags.Arg(0), err)
+		return usageError(fmt.Sprintf("request ID %q: %v", flags.Arg(0), err))
 	}
 
-	sn, at, err := openSafenet(ctx, cfg, *block)
+	sn, at, err := openSafenet(ctx, e.cfg, *block)
 	if err != nil {
 		return err
 	}
@@ -45,9 +40,9 @@ func info(ctx context.Context, cfg config.Config, args []string) error {
 	}
 
 	if *asJSON {
-		return writeJSON(request)
+		return writeJSON(e.stdout, request)
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
 	writeRequest(w, request)
 	return w.Flush()
 }

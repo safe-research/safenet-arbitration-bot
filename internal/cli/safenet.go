@@ -1,10 +1,10 @@
-package main
+package cli
 
 import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"os"
+	"io"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/config"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -31,9 +31,9 @@ func openSafenet(ctx context.Context, cfg config.Config, block uint64) (*safenet
 	return safenet.New(eth, oracle, consensus), at, nil
 }
 
-// writeJSON writes v to stdout as indented JSON.
-func writeJSON(v any) error {
-	encoder := json.NewEncoder(os.Stdout)
+// writeJSON writes v to w as indented JSON.
+func writeJSON(w io.Writer, v any) error {
+	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(v)
 }

@@ -18,7 +18,9 @@ import (
 // Safenet deployment's contracts on anvil, with requests in every state and
 // with every arbitration outcome.
 func TestPendingAndInfo(t *testing.T) {
-	n := e2e.NewTestnet(t)
+	t.Parallel()
+	// Timing out an arbitration mines many blocks, so anvil keeps no history.
+	n := e2e.NewTestnet(t, 0)
 	s1, s2, s3 := n.Artifacts.Sentinels[0], n.Artifacts.Sentinels[1], n.Artifacts.Sentinels[2]
 
 	// A dispute that the arbitrator lets time out, which comes first so that its
@@ -58,7 +60,7 @@ func TestPendingAndInfo(t *testing.T) {
 	pending := n.Propose(nil)
 	n.Commit(pending.Approve(s3))
 
-	arbot := e2e.BuildArbot(t, n.Anvil)
+	arbot := e2e.NewArbot(t, n.Anvil)
 
 	t.Run("pending", func(t *testing.T) {
 		deadline := frozen.FrozenBlock + n.ArbitrationTimeout
@@ -69,13 +71,6 @@ func TestPendingAndInfo(t *testing.T) {
 		text := arbot.Run(t, "pending")
 		if !regexp.MustCompile(fmt.Sprintf(`(?m)^%s +%d +%d$`, frozen.ID, frozen.FrozenBlock, deadline)).Match(text) {
 			t.Errorf("pending: output doesn't list the dispute:\n%s", text)
-		}
-
-		// Before the dispute was frozen, there was none. Anvil only keeps the state of
-		// recent blocks, which this is.
-		block := fmt.Sprint(frozen.FrozenBlock - 1)
-		if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json", "-block", block)); len(got) != 0 {
-			t.Errorf("pending -block %s: got %+v, want none", block, got)
 		}
 	})
 
@@ -175,6 +170,34 @@ func TestPendingAndInfo(t *testing.T) {
 			t.Errorf("info: got error %q, want one saying that the request was not found", stderr)
 		}
 	})
+}
+
+// TestBlock runs `arbot pending` and `arbot info` at past blocks: before and
+// after a dispute is frozen.
+func TestBlock(t *testing.T) {
+	t.Parallel()
+	n := e2e.NewTestnet(t, 16)
+	s1, s2 := n.Artifacts.Sentinels[0], n.Artifacts.Sentinels[1]
+	frozen := n.Propose(nil)
+	n.Vote(frozen.Approve(s1), frozen.Deny(s2, "R-4.1"))
+	n.Mine(1)
+	arbot := e2e.NewArbot(t, n.Anvil)
+
+	before, after := fmt.Sprint(frozen.FrozenBlock-1), fmt.Sprint(frozen.FrozenBlock)
+	if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json", "-block", before)); len(got) != 0 {
+		t.Errorf("pending -block %s: got %+v, want none", before, got)
+	}
+	want := []safenet.Dispute{{RequestID: frozen.ID, FrozenBlock: frozen.FrozenBlock, Deadline: frozen.FrozenBlock + n.ArbitrationTimeout}}
+	if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json", "-block", after)); !reflect.DeepEqual(got, want) {
+		t.Errorf("pending -block %s: got %+v, want %+v", after, got, want)
+	}
+
+	for block, state := range map[string]string{before: "PENDING", after: "FROZEN"} {
+		got := decode[requestInfo](t, arbot.Run(t, "info", "-json", "-block", block, frozen.ID.String()))
+		if got.State != state || (got.Arbitration != nil) != (state == "FROZEN") {
+			t.Errorf("info -block %s: got state %s and arbitration %+v, want state %s", block, got.State, got.Arbitration, state)
+		}
+	}
 }
 
 // requestInfo is the part of the JSON output of `arbot info` that the test
