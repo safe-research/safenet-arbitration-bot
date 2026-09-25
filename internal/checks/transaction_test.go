@@ -36,7 +36,7 @@ func TestComponents(t *testing.T) {
 	gwei := big.NewInt(1_000_000_000)
 	refund := new(big.Int).Mul(big.NewInt(120_000), gwei)
 	etherRefund := func(to ethrpc.Address, amount *big.Int) call {
-		return call{to: to, value: amount, data: ethrpc.Bytes{}, operation: safenet.OperationCall}
+		return call{to: to, value: amount, data: ethrpc.Bytes{}, operation: safenet.OperationCall, kind: Refund}
 	}
 	tokenRefund := func(amount *big.Int) call {
 		return call{
@@ -44,6 +44,7 @@ func TestComponents(t *testing.T) {
 			value:     new(big.Int),
 			data:      solabi.Call(solabi.Selector("transfer(address,uint256)"), receiver, amount),
 			operation: safenet.OperationCall,
+			kind:      Refund,
 		}
 	}
 

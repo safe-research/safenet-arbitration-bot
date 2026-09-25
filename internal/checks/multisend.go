@@ -176,6 +176,7 @@ func expandMultiSendCall(safe ethrpc.Address, c call) ([]call, bool) {
 			value:     new(big.Int).SetBytes(head[21:53]),
 			data:      data,
 			operation: operation,
+			kind:      Batched,
 		}
 		subCalls, reverts := expandMultiSendCall(safe, sub)
 		if reverts {

@@ -31,11 +31,25 @@ type call struct {
 	value     *big.Int
 	data      ethrpc.Bytes
 	operation safenet.Operation
+	kind      callKind
 }
+
+// callKind is where a call that a Safe makes comes from in its transaction.
+type callKind uint8
+
+const (
+	// Root is the call of the Safe transaction itself, or a placeholder for it.
+	Root callKind = iota
+	// Batched is one of the calls of a MultiSend.
+	Batched
+	// Refund is the synthetic call that pays the transaction's gas refund.
+	Refund
+)
 
 // equal reports whether c and o are the same call.
 func (c call) equal(o call) bool {
-	return c.to == o.to && c.value.Cmp(o.value) == 0 && bytes.Equal(c.data, o.data) && c.operation == o.operation
+	return c.to == o.to && c.value.Cmp(o.value) == 0 && bytes.Equal(c.data, o.data) && c.operation == o.operation &&
+		c.kind == o.kind
 }
 
 // components returns the components of a Safe transaction. It returns an error
@@ -97,12 +111,13 @@ func gasRefund(tx *safenet.SafeTransaction) (call, bool) {
 		amount.Set(maxUint256)
 	}
 	if tx.GasToken == (ethrpc.Address{}) {
-		return call{to: tx.RefundReceiver, value: amount, data: ethrpc.Bytes{}, operation: safenet.OperationCall}, true
+		return call{to: tx.RefundReceiver, value: amount, data: ethrpc.Bytes{}, operation: safenet.OperationCall, kind: Refund}, true
 	}
 	return call{
 		to:        tx.GasToken,
 		value:     new(big.Int),
 		data:      solabi.Call(transferSelector, tx.RefundReceiver, amount),
 		operation: safenet.OperationCall,
+		kind:      Refund,
 	}, true
 }

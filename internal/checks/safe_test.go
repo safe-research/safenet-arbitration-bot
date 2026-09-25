@@ -144,7 +144,7 @@ func TestUnsupportedSafe(t *testing.T) {
 	}
 	for i, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			supportedSafes.Clear()
+			safeVersions.Clear()
 			safe := ethrpc.Address{0: 0x5a, 19: byte(i)}
 			node := &fakeNode{accounts: map[ethrpc.Address]account{safe: test.account}}
 			at := &env{dial: node.dialer(t, testSafeBlock), block: testSafeBlock}
@@ -160,7 +160,7 @@ func TestUnsupportedSafe(t *testing.T) {
 }
 
 func TestUnsupportedSafeCache(t *testing.T) {
-	supportedSafes.Clear()
+	safeVersions.Clear()
 	safe := ethrpc.Address{0: 0x5a, 19: 0xca}
 	node := &fakeNode{accounts: map[ethrpc.Address]account{safe: proxy(safeProxy141, singletonOf("1.4.1"))}}
 	match := func(env *env, chainID int64) {
@@ -188,7 +188,7 @@ func TestUnsupportedSafeCache(t *testing.T) {
 func TestUnsupportedSafeErrors(t *testing.T) {
 	safe := &safeID{address: ethrpc.Address{0: 0x5a}, chainID: big.NewInt(ethrpc.ArbitrumOne)}
 	for _, method := range []string{"eth_getCode", "eth_getStorageAt"} {
-		supportedSafes.Clear()
+		safeVersions.Clear()
 
 		// An error isn't cached, so the Safe is read again.
 		node := &fakeNode{accounts: map[ethrpc.Address]account{safe.address: proxy(safeProxy150, singletonOf("1.5.0"))}, fail: method}
@@ -198,12 +198,12 @@ func TestUnsupportedSafeErrors(t *testing.T) {
 				t.Errorf("unsupportedSafe with %s failing: got error %v, want the node's error", method, err)
 			}
 		}
-		if _, ok := supportedSafes.Load(safeAt{address: safe.address, chainID: ethrpc.ArbitrumOne, block: testSafeBlock}); ok {
+		if _, ok := safeVersions.Load(safeAt{address: safe.address, chainID: ethrpc.ArbitrumOne, block: testSafeBlock}); ok {
 			t.Errorf("unsupportedSafe with %s failing: cached a result", method)
 		}
 	}
 
-	supportedSafes.Clear()
+	safeVersions.Clear()
 	dialErr := func(context.Context, uint64) (*ethrpc.Client, error) { return nil, fmt.Errorf("no RPC") }
 	if _, err := unsupportedSafe.fn(t.Context(), &env{dial: dialErr, block: testSafeBlock}, safe, call{}); err == nil {
 		t.Error("unsupportedSafe: expected an error when the chain can't be dialed")
@@ -211,7 +211,7 @@ func TestUnsupportedSafeErrors(t *testing.T) {
 }
 
 func TestClassifyUnsupportedSafe(t *testing.T) {
-	supportedSafes.Clear()
+	safeVersions.Clear()
 	safe := ethrpc.Address{0: 0x5a, 19: 0xcb}
 	node := &fakeNode{accounts: map[ethrpc.Address]account{safe: proxy(safeProxy130, ethrpc.Address{19: 1})}}
 	tx := emptyMultiSend(ethrpc.MustParseAddress("0x218543288004CD07832472D464648173c77D7eB7"))

@@ -52,8 +52,8 @@ var unsupportedSafe = check{
 	verdict:     OutOfScope,
 	description: "account that isn't a Safe of a version that the Charter covers",
 	fn: func(ctx context.Context, env *env, safe *safeID, _ call) (bool, error) {
-		supported, err := supportedSafe(ctx, env, safe.address, safe.chainID.Uint64())
-		return !supported, err
+		version, err := safeVersion(ctx, env, safe)
+		return version == "", err
 	},
 }
 
@@ -64,36 +64,38 @@ type safeAt struct {
 	block   uint64
 }
 
-// supportedSafes caches supportedSafe by safeAt, since unsupportedSafe runs on
-// every call of a transaction, and a chain's state at a block doesn't change.
-var supportedSafes sync.Map
+// safeVersions caches safeVersion by safeAt, since checks run on every call of
+// a transaction, and a chain's state at a block doesn't change.
+var safeVersions sync.Map
 
-// supportedSafe reports whether the account at address on the chain with ID
-// chainID is a Safe of a version that § 2.1 lists, at env's block.
-func supportedSafe(ctx context.Context, env *env, address ethrpc.Address, chainID uint64) (bool, error) {
-	key := safeAt{address: address, chainID: chainID, block: env.block}
-	if supported, ok := supportedSafes.Load(key); ok {
-		return supported.(bool), nil
+// safeVersion returns the version of the Safe, as singletons has it, at env's
+// block, or "" if the account isn't a Safe of a version that § 2.1 lists. The
+// Safe must be on a network that the Charter covers, as it is for every check
+// after offNetwork.
+func safeVersion(ctx context.Context, env *env, safe *safeID) (string, error) {
+	key := safeAt{address: safe.address, chainID: safe.chainID.Uint64(), block: env.block}
+	if version, ok := safeVersions.Load(key); ok {
+		return version.(string), nil
 	}
-	client, err := env.dial(ctx, chainID)
+	client, err := env.dial(ctx, key.chainID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	// The account is read with eth_getCode and eth_getStorageAt rather than with a
 	// single eth_getProof, since fewer nodes serve eth_getProof at older blocks.
 	block := ethrpc.BlockNumber(env.block)
-	code, err := client.GetCode(ctx, address, block)
+	code, err := client.GetCode(ctx, safe.address, block)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	supported := slices.Contains(safeProxyCodeHashes, ethrpc.Hash(keccak256.Hash(code)))
-	if supported {
-		slot0, err := client.GetStorageAt(ctx, address, ethrpc.Hash{}, block)
+	var version string
+	if slices.Contains(safeProxyCodeHashes, ethrpc.Hash(keccak256.Hash(code))) {
+		slot0, err := client.GetStorageAt(ctx, safe.address, ethrpc.Hash{}, block)
 		if err != nil {
-			return false, err
+			return "", err
 		}
-		_, supported = singletons[ethrpc.Address(slot0[12:])]
+		version = singletons[ethrpc.Address(slot0[12:])]
 	}
-	supportedSafes.Store(key, supported)
-	return supported, nil
+	safeVersions.Store(key, version)
+	return version, nil
 }

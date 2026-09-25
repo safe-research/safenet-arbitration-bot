@@ -57,6 +57,13 @@ func TestExpandTransactionCalls(t *testing.T) {
 	delegate := func(to ethrpc.Address, calls ...call) call {
 		return multiSendTo(to, safenet.OperationDelegateCall, pack(calls...))
 	}
+	// batched returns calls as the calls of a MultiSend.
+	batched := func(calls ...call) []call {
+		for i := range calls {
+			calls[i].kind = Batched
+		}
+		return calls
+	}
 	withData := func(c call, data ethrpc.Bytes) call {
 		c.data = data
 		return c
@@ -79,8 +86,8 @@ func TestExpandTransactionCalls(t *testing.T) {
 		reverts bool
 	}{
 		{"not a MultiSend", transfer, []call{transfer}, false},
-		{"MultiSend", delegate(multiSend141, transfer, library), []call{transfer, library}, false},
-		{"MultiSendCallOnly", delegate(callOnly141, transfer, transfer), []call{transfer, transfer}, false},
+		{"MultiSend", delegate(multiSend141, transfer, library), batched(transfer, library), false},
+		{"MultiSendCallOnly", delegate(callOnly141, transfer, transfer), batched(transfer, transfer), false},
 		{"no transactions", delegate(multiSend141), []call{emptyMultiSend(multiSend141)}, false},
 		{"empty", emptyMultiSend(multiSend150), []call{emptyMultiSend(multiSend150)}, false},
 		{"nested empty", delegate(multiSend141, delegate(multiSend150)), []call{emptyMultiSend(multiSend141)}, false},
@@ -93,7 +100,7 @@ func TestExpandTransactionCalls(t *testing.T) {
 		{
 			"nested",
 			delegate(multiSend130, library, delegate(multiSend150, transfer, delegate(callOnly150, transfer))),
-			[]call{library, transfer, transfer},
+			batched(library, transfer, transfer),
 			false,
 		},
 		{"MultiSend called", with(delegate(multiSend141, transfer), safenet.OperationCall), nil, true},
@@ -116,31 +123,31 @@ func TestExpandTransactionCalls(t *testing.T) {
 		{"unknown operation", delegate(multiSend141, transfer, with(transfer, 2)), nil, true},
 		{"call to MultiSend", delegate(multiSend141, transfer, with(delegate(multiSend150), safenet.OperationCall)), nil, true},
 		{"nested revert", delegate(multiSend141, transfer, delegate(callOnly141, library)), nil, true},
-		{"zero address since 1.5.0", delegate(multiSend150, selfCall), []call{toSafe}, false},
-		{"zero address from MultiSendCallOnly since 1.5.0", delegate(callOnly150, selfCall), []call{toSafe}, false},
-		{"zero address before 1.5.0", delegate(multiSend141, selfCall), []call{selfCall}, false},
+		{"zero address since 1.5.0", delegate(multiSend150, selfCall), batched(toSafe), false},
+		{"zero address from MultiSendCallOnly since 1.5.0", delegate(callOnly150, selfCall), batched(toSafe), false},
+		{"zero address before 1.5.0", delegate(multiSend141, selfCall), batched(selfCall), false},
 		{
 			"ignored trailing bytes",
 			multiSendTo(multiSend141, safenet.OperationDelegateCall, append(pack(transfer), make([]byte, 32)...)),
-			[]call{transfer},
+			batched(transfer),
 			false,
 		},
 		{
 			"truncated transaction",
 			multiSendTo(multiSend141, safenet.OperationDelegateCall, append(pack(transfer), truncated...)),
-			[]call{transfer, {to: ethrpc.Address(truncated[1:21]), value: truncatedValue, data: ethrpc.Bytes{}, operation: safenet.OperationCall}},
+			batched(transfer, call{to: ethrpc.Address(truncated[1:21]), value: truncatedValue, data: ethrpc.Bytes{}, operation: safenet.OperationCall}),
 			false,
 		},
 		{
 			"truncated data",
 			multiSendTo(multiSend141, safenet.OperationDelegateCall, pack(library)[:86]),
-			[]call{withData(library, ethrpc.Bytes{0x12, 0})},
+			batched(withData(library, ethrpc.Bytes{0x12, 0})),
 			false,
 		},
 		{
 			"largest data length",
 			multiSendTo(multiSend141, safenet.OperationDelegateCall, withDataLength(pack(transfer), big.NewInt(maxDataLength))),
-			[]call{withData(transfer, make(ethrpc.Bytes, maxDataLength))},
+			batched(withData(transfer, make(ethrpc.Bytes, maxDataLength))),
 			false,
 		},
 		{
@@ -207,7 +214,7 @@ func TestMultiSendChecks(t *testing.T) {
 	}
 
 	// The transactions are by a Safe of version 1.5.0 at the zero address.
-	supportedSafes.Clear()
+	safeVersions.Clear()
 	node := &fakeNode{accounts: map[ethrpc.Address]account{{}: proxy(safeProxy150, singletonOf("1.5.0"))}}
 	dial := node.dialer(t, testSafeBlock)
 	multiSend150 := ethrpc.MustParseAddress("0x218543288004CD07832472D464648173c77D7eB7")

@@ -91,7 +91,23 @@ func (c check) classification() Classification {
 
 // checks are the checks that Classify runs, in the order that it runs them.
 // They are grouped by verdict, in verdictOrder.
-var checks = []check{offNetwork, unsupportedSafe, emptyMultiSendCheck, invalidMultiSendCheck}
+var checks = []check{
+	offNetwork,
+	unsupportedSafe,
+	addOwnerCheck,
+	removeOwnerCheck,
+	swapOwnerCheck,
+	changeThresholdCheck,
+	enableModuleCheck,
+	disableModuleCheck,
+	setGuardCheck,
+	setFallbackHandlerCheck,
+	setModuleGuardCheck,
+	emptyMultiSendCheck,
+	invalidMultiSendCheck,
+	allowedDisableModuleCheck,
+	allowedSetFallbackHandlerCheck,
+}
 
 // verdictOrder is the order of the verdicts of checks: a request that is out of
 // scope gets no security ruling, and a request that fails a rule is insecure,
