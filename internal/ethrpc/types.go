@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Address is a 20-byte Ethereum account address.
@@ -165,6 +166,11 @@ type Block struct {
 	Number    BlockNumber `json:"number"`
 	Hash      Hash        `json:"hash"`
 	Timestamp Quantity    `json:"timestamp"`
+}
+
+// Time returns the block's timestamp as a time in UTC.
+func (b Block) Time() time.Time {
+	return time.Unix(int64(b.Timestamp), 0).UTC()
 }
 
 // Error is an error returned by the JSON-RPC server.

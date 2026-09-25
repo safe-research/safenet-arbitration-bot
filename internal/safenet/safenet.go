@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
@@ -274,7 +273,7 @@ func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (P
 			return Proposal{}, fmt.Errorf("getting proposal block: %w", err)
 		}
 		proposal.Consensus = s.consensus
-		proposal.Time = time.Unix(int64(header.Timestamp), 0).UTC()
+		proposal.Time = header.Time()
 		return proposal, nil
 	}
 	return Proposal{}, fmt.Errorf("request %s: no proposal in block %d hashes to the request ID", id, block)
