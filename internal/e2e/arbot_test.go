@@ -166,9 +166,19 @@ func TestPendingAndInfo(t *testing.T) {
 				}
 			}
 
+			// The text shows the state, the fee token's amounts in its units, and
+			// checksummed addresses.
 			text := arbot.Run(t, "info", r.ID.String())
-			if !regexp.MustCompile(`(?m)^  State +` + test.state + `$`).Match(text) {
-				t.Errorf("info: output doesn't show state %s:\n%s", test.state, text)
+			for _, line := range []string{
+				`  State +` + test.state,
+				`  Fee token +` + a.FeeToken.String() + ` \(WETH, 18 decimals\)`,
+				`  Bond +10 WETH`,
+				`  Slash amount +1 WETH`,
+				`  Sponsor +` + n.Sponsor.String(),
+			} {
+				if !regexp.MustCompile(`(?m)^` + line + `$`).Match(text) {
+					t.Errorf("info: output has no line matching %q:\n%s", line, text)
+				}
 			}
 		})
 	}

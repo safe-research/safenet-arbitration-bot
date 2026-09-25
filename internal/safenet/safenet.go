@@ -31,6 +31,7 @@ var (
 	arbitrationTimeoutSelector = solabi.Selector("ARBITRATION_TIMEOUT()")
 	proposerSelector           = solabi.Selector("PROPOSER()")
 	charterENSSelector         = solabi.Selector("charterEns()")
+	feeTokenSelector           = solabi.Selector("FEE_TOKEN()")
 	requestNotFoundSelector    = solabi.Selector("RequestNotFound()")
 )
 
@@ -183,6 +184,9 @@ func (s *session) request(ctx context.Context, id ethrpc.Hash) (*Request, error)
 		return nil, fmt.Errorf("SentinelOracle %s has PROPOSER %s, not Consensus %s", s.oracle, proposer, s.consensus)
 	}
 	if request.Charter, err = s.callString(ctx, block, charterENSSelector); err != nil {
+		return nil, err
+	}
+	if request.FeeToken, err = s.feeToken(ctx, block); err != nil {
 		return nil, err
 	}
 
@@ -555,6 +559,45 @@ func (s *session) arbitration(ctx context.Context, id ethrpc.Hash, state State, 
 		return nil, fmt.Errorf("request %s is %s, but its arbitration logs have outcome %s", id, state, arbitration.Outcome)
 	}
 	return arbitration, nil
+}
+
+// ERC-20 functions.
+var (
+	symbolSelector   = solabi.Selector("symbol()")
+	decimalsSelector = solabi.Selector("decimals()")
+)
+
+// feeToken returns the oracle's FEE_TOKEN, with its symbol and decimals.
+func (s *session) feeToken(ctx context.Context, block ethrpc.BlockNumber) (Token, error) {
+	address, err := s.callAddress(ctx, block, feeTokenSelector)
+	if err != nil {
+		return Token{}, err
+	}
+	call := func(selector [4]byte) (*solabi.Decoder, error) {
+		result, err := s.eth.Call(ctx, ethrpc.CallRequest{To: address, Data: solabi.Call(selector)}, block)
+		return solabi.NewDecoder(result), err
+	}
+	token := Token{Address: address}
+	d, err := call(symbolSelector)
+	if err == nil {
+		token.Symbol = d.String(0)
+		err = d.Err()
+	}
+	if err != nil {
+		return Token{}, fmt.Errorf("getting the symbol of fee token %s: %w", address, err)
+	}
+	d, err = call(decimalsSelector)
+	if err == nil {
+		decimals := d.Uint64(0)
+		if err = d.Err(); err == nil && decimals > 255 {
+			err = fmt.Errorf("%d decimals", decimals)
+		}
+		token.Decimals = uint8(decimals)
+	}
+	if err != nil {
+		return Token{}, fmt.Errorf("getting the decimals of fee token %s: %w", address, err)
+	}
+	return token, nil
 }
 
 // call calls a SentinelOracle function without arguments, and returns a decoder

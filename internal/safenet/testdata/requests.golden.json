@@ -3,6 +3,11 @@
     "id": "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "FROZEN",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -62,6 +67,11 @@
     "id": "0x3c25a142c4a7e1eaac635f2f271acc4d7d9ed9109c54321b25556ca68e5dfa6b",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "RESOLVED_DENIED",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -127,6 +137,11 @@
     "id": "0x68f9225d10c8f8bf8b8a13821d7bcfe70a4f65c63121d154ef13c01bcc17c36c",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "RESOLVED_APPROVED",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -198,6 +213,11 @@
     "id": "0xdcc1fd09f0f6e226179f2bbaa852d45f1df3dbf5f18916b100165511e8888eed",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "TIMED_OUT",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -262,6 +282,11 @@
     "id": "0x9638bb644c8626d39168db94daca90cfb2908e174c5fb6284adfbdd547812945",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "TIMED_OUT",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -331,6 +356,11 @@
     "id": "0x6873954d892a95127ddca0f8972902134b0d509e1d40190854b9ba3b1e7e8fda",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "RESOLVED_APPROVED",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
@@ -380,6 +410,11 @@
     "id": "0xbf8a51ff22a488e078e455e1a7579f5112b14b54cc4ca1cb7bed6efa6e8ede38",
     "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
     "charter": "charter.safenet-gov.eth",
+    "feeToken": {
+      "address": "0x3b1cfcfa89a19f6cdf8995ee8ae35d7d585e7025",
+      "symbol": "MTK",
+      "decimals": 18
+    },
     "state": "TIMED_OUT",
     "terms": {
       "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",

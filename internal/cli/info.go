@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/big"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -52,9 +55,10 @@ func writeRequest(w io.Writer, r *safenet.Request) {
 	fmt.Fprintf(w, "  Charter\t%q\n", r.Charter)
 	fmt.Fprintf(w, "  State\t%s\n", r.State)
 	fmt.Fprintf(w, "  Sponsor\t%s\n", r.Terms.Sponsor)
-	fmt.Fprintf(w, "  Fee\t%s\n", r.Fee)
-	fmt.Fprintf(w, "  Bond\t%s\n", r.Terms.Bond)
-	fmt.Fprintf(w, "  Slash amount\t%s\n", r.Terms.SlashAmount)
+	fmt.Fprintf(w, "  Fee token\t%s (%s, %d decimals)\n", r.FeeToken.Address, symbol(r.FeeToken), r.FeeToken.Decimals)
+	fmt.Fprintf(w, "  Fee\t%s\n", formatAmount(r.Fee, r.FeeToken))
+	fmt.Fprintf(w, "  Bond\t%s\n", formatAmount(r.Terms.Bond, r.FeeToken))
+	fmt.Fprintf(w, "  Slash amount\t%s\n", formatAmount(r.Terms.SlashAmount, r.FeeToken))
 	fmt.Fprintf(w, "  DAO fee share\t%s%%\n", strconv.FormatFloat(float64(r.Terms.DAOFeeShare)/1000, 'f', -1, 64))
 	fmt.Fprintf(w, "  Commit deadline\tblock %d\n", r.Terms.CommitDeadline)
 	fmt.Fprintf(w, "  Reveal deadline\tblock %d\n", r.Terms.RevealDeadline)
@@ -90,7 +94,7 @@ func writeRequest(w io.Writer, r *safenet.Request) {
 		fmt.Fprintf(w, "  none\n")
 	}
 	for _, v := range r.Votes {
-		fmt.Fprintf(w, "  %s\t%s\tbond %s\treason %q\n", v.Sentinel, v.Vote, v.Bond, v.Reason)
+		fmt.Fprintf(w, "  %s\t%s\tbond %s\treason %q\n", v.Sentinel, v.Vote, formatAmount(v.Bond, r.FeeToken), v.Reason)
 	}
 
 	a := r.Arbitration
@@ -102,7 +106,7 @@ func writeRequest(w io.Writer, r *safenet.Request) {
 	fmt.Fprintf(w, "  Deadline\tblock %d\n", a.Deadline)
 	fmt.Fprintf(w, "  Outcome\t%s\n", a.Outcome)
 	if a.Slashed != nil {
-		fmt.Fprintf(w, "  Slashed\t%s\n", a.Slashed)
+		fmt.Fprintf(w, "  Slashed\t%s\n", formatAmount(a.Slashed, r.FeeToken))
 	}
 	switch a.Outcome {
 	case safenet.OutcomeSecure, safenet.OutcomeInsecure, safenet.OutcomeOutOfScope:
@@ -111,4 +115,41 @@ func writeRequest(w io.Writer, r *safenet.Request) {
 	if a.Record != nil {
 		fmt.Fprintf(w, "  Record\tblock %d, transaction %s\n", a.Record.Block, a.Record.TxHash)
 	}
+}
+
+// formatAmount formats an amount of token in the token's units, followed by its
+// symbol, such as "0.4 MTK".
+func formatAmount(amount *big.Int, token safenet.Token) string {
+	return formatUnits(amount, token.Decimals) + " " + symbol(token)
+}
+
+// symbol returns the token's symbol, quoted unless it is a plain word, as it
+// comes from the chain and could contain terminal escape sequences.
+func symbol(token safenet.Token) string {
+	plain := token.Symbol != "" && !strings.ContainsFunc(token.Symbol, func(r rune) bool {
+		return !unicode.IsPrint(r) || unicode.IsSpace(r)
+	})
+	if plain {
+		return token.Symbol
+	}
+	return strconv.Quote(token.Symbol)
+}
+
+// formatUnits formats amount as a decimal number with the given number of
+// decimals, without trailing zeros: 400000000000000000 with 18 decimals is
+// "0.4".
+func formatUnits(amount *big.Int, decimals uint8) string {
+	digits := new(big.Int).Abs(amount).String()
+	d := int(decimals)
+	if len(digits) <= d {
+		digits = strings.Repeat("0", d-len(digits)+1) + digits
+	}
+	whole, fraction := digits[:len(digits)-d], strings.TrimRight(digits[len(digits)-d:], "0")
+	if amount.Sign() < 0 {
+		whole = "-" + whole
+	}
+	if fraction == "" {
+		return whole
+	}
+	return whole + "." + fraction
 }

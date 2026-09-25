@@ -32,7 +32,7 @@ var (
 // testdata/gnosis.json was recorded through a JSON-RPC proxy in front of
 // https://rpc.gnosischain.com, while running `arbot pending` and `arbot info`
 // for the requests in TestRequest, and for an unknown request ID, at the
-// fixture's block.
+// fixture's block. The calls for the fee token were added later, with cast.
 //
 // testdata/headers.json holds, by chain ID, the block headers that Request
 // reads to find the blocks before each proposal: the proposal blocks' parents

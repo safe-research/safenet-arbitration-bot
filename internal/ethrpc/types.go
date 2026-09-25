@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/keccak256"
 )
 
 // Address is a 20-byte Ethereum account address.
@@ -21,13 +23,24 @@ func ParseAddress(s string) (Address, error) {
 	return a, err
 }
 
-// String returns the address as lowercase 0x-prefixed hex.
+// String returns the address as 0x-prefixed hex, with the EIP-55 checksum in
+// the case of its letters.
 func (a Address) String() string {
-	return encodeHex(a[:])
+	hex := []byte(encodeHex(a[:]))
+	hash := keccak256.Hash(hex[2:])
+	for i, c := range hex[2:] {
+		// A letter is uppercase if the corresponding nibble of the hash of the
+		// lowercase hex is 8 or more.
+		if nibble := hash[i/2] >> (4 * (1 - i%2)) & 0xf; c >= 'a' && nibble >= 8 {
+			hex[2+i] = c - 'a' + 'A'
+		}
+	}
+	return string(hex)
 }
 
+// MarshalText encodes the address as lowercase 0x-prefixed hex.
 func (a Address) MarshalText() ([]byte, error) {
-	return []byte(a.String()), nil
+	return []byte(encodeHex(a[:])), nil
 }
 
 func (a *Address) UnmarshalText(text []byte) error {

@@ -6,13 +6,16 @@ import (
 )
 
 func TestAddress(t *testing.T) {
-	const s = "0x223624cbf099e5a8f8cd5af22afa424a1d1acee9"
-	a, err := ParseAddress("0x223624cBF099e5a8f8cD5aF22aFa424a1d1acEE9")
+	const lower = "0x223624cbf099e5a8f8cd5af22afa424a1d1acee9"
+	a, err := ParseAddress(lower)
 	if err != nil {
 		t.Fatalf("ParseAddress: %v", err)
 	}
-	if a.String() != s {
-		t.Errorf("String: got %s, want %s", a, s)
+	if want := "0x223624cBF099e5a8f8cD5aF22aFa424a1d1acEE9"; a.String() != want {
+		t.Errorf("String: got %s, want %s", a, want)
+	}
+	if text, _ := a.MarshalText(); string(text) != lower {
+		t.Errorf("MarshalText: got %s, want %s", text, lower)
 	}
 
 	for _, invalid := range []string{
@@ -23,6 +26,28 @@ func TestAddress(t *testing.T) {
 	} {
 		if _, err := ParseAddress(invalid); err == nil {
 			t.Errorf("ParseAddress(%q): expected an error", invalid)
+		}
+	}
+}
+
+// TestAddressChecksum checks String against the test vectors of EIP-55.
+func TestAddressChecksum(t *testing.T) {
+	for _, want := range []string{
+		"0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+		"0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+		"0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+		"0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+		"0x52908400098527886E0F7030069857D2E4169EE7",
+		"0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+		"0xde709f2102306220921060314715629080e2fb77",
+		"0x27b1fdb04752bbc536007a920d24acb045561c26",
+	} {
+		a, err := ParseAddress(want)
+		if err != nil {
+			t.Fatalf("ParseAddress(%s): %v", want, err)
+		}
+		if a.String() != want {
+			t.Errorf("String: got %s, want %s", a, want)
 		}
 	}
 }

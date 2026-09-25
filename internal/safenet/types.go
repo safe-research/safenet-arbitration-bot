@@ -26,8 +26,10 @@ type Request struct {
 	// Charter is the ENS name of the Safenet Arbitration Charter that the oracle
 	// trusts.
 	Charter string `json:"charter"`
-	State   State  `json:"state"`
-	Terms   Terms  `json:"terms"`
+	// FeeToken is the token of the fees, bonds, and slashed amounts.
+	FeeToken Token `json:"feeToken"`
+	State    State `json:"state"`
+	Terms    Terms `json:"terms"`
 	// Fee is the part of the sponsor's fee that the oracle holds for the request:
 	// the full fee until the request resolves, then the part left for the winning
 	// sentinels, and zero once it is refunded.
@@ -36,6 +38,13 @@ type Request struct {
 	Votes    []Commitment `json:"votes"`
 	// Arbitration is nil unless a split vote froze the request.
 	Arbitration *Arbitration `json:"arbitration"`
+}
+
+// Token is an ERC-20 token.
+type Token struct {
+	Address  ethrpc.Address `json:"address"`
+	Symbol   string         `json:"symbol"`
+	Decimals uint8          `json:"decimals"`
 }
 
 // Terms are the terms that the oracle set for a request when it was posted.
