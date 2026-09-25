@@ -3,7 +3,9 @@ package cli
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/config"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -23,4 +25,26 @@ func writeJSON(w io.Writer, v any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(v)
+}
+
+// readRequest reads a request from the JSON file at path, as `arbot info -json`
+// writes it.
+func readRequest(path string) (*safenet.Request, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	// Reject unknown fields, so that a misspelled field in a hand-written request
+	// fails rather than being left empty.
+	decoder := json.NewDecoder(f)
+	decoder.DisallowUnknownFields()
+	var request *safenet.Request
+	if err := decoder.Decode(&request); err != nil {
+		return nil, fmt.Errorf("reading request from %s: %w", path, err)
+	}
+	if request == nil {
+		return nil, fmt.Errorf("reading request from %s: no request", path)
+	}
+	return request, nil
 }

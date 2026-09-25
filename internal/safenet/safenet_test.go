@@ -507,6 +507,43 @@ func TestRequest(t *testing.T) {
 	}
 }
 
+// TestRequestJSONRoundTrip checks that requests decode from the JSON that they
+// encode to, as `arbot classify -request-file` reads them.
+func TestRequestJSONRoundTrip(t *testing.T) {
+	want, err := os.ReadFile("testdata/requests.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []*Request
+	decoder := json.NewDecoder(bytes.NewReader(want))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&requests); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	encoder := json.NewEncoder(&got)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(requests); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Errorf("requests encode to different JSON after decoding:\n%s", got.Bytes())
+	}
+}
+
+func TestEnumUnmarshalText(t *testing.T) {
+	var state State
+	if err := state.UnmarshalText([]byte("FROZEN")); err != nil || state != StateFrozen {
+		t.Errorf("State.UnmarshalText(FROZEN) = %v, %v; want %v", state, err, StateFrozen)
+	}
+	for _, text := range []string{"frozen", "UNKNOWN(9)", ""} {
+		if err := state.UnmarshalText([]byte(text)); err == nil {
+			t.Errorf("State.UnmarshalText(%q): expected an error", text)
+		}
+	}
+}
+
 // TestRequestBlocks checks the blocks before proposals of Safe transactions on
 // another chain, on Gnosis Chain, and on Ethereum Mainnet. The Arbitrum and
 // Mainnet blocks were checked with cast: they are the last ones before the

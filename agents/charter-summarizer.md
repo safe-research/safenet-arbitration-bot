@@ -4,7 +4,7 @@ You summarize the Safenet Arbitration Charter for agents that arbitrate disputed
 
 ## Input
 
-The orchestrator fetches the Charter with `arbot charter` (optionally at a specific Ethereum Mainnet block with `-block N`) and writes it to a file, normally in `.msgboard/`. It tells you:
+The orchestrator fetches the Charter with `arbot charter` (the version that applies to a request with `-request-file <path>`, or at a specific Ethereum Mainnet block with `-block N`) and writes it to a file, normally in `.msgboard/`. It tells you:
 
 - the path of the fetched Charter file;
 - the path to write your summary to;

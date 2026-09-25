@@ -3,6 +3,7 @@ package safenet
 import (
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -159,6 +160,10 @@ func (s State) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }
 
+func (s *State) UnmarshalText(text []byte) error {
+	return parseEnum(stateNames, text, s)
+}
+
 // Vote is a sentinel's vote, SentinelOracleCommitment.Vote.
 type Vote uint8
 
@@ -179,6 +184,10 @@ func (v Vote) MarshalText() ([]byte, error) {
 	return []byte(v.String()), nil
 }
 
+func (v *Vote) UnmarshalText(text []byte) error {
+	return parseEnum(voteNames, text, v)
+}
+
 // Operation is the operation type of a Safe transaction.
 type Operation uint8
 
@@ -195,6 +204,10 @@ func (o Operation) String() string {
 
 func (o Operation) MarshalText() ([]byte, error) {
 	return []byte(o.String()), nil
+}
+
+func (o *Operation) UnmarshalText(text []byte) error {
+	return parseEnum(operationNames, text, o)
 }
 
 // Outcome is the outcome of an arbitration.
@@ -220,4 +233,13 @@ func enumName[T ~uint8](names []string, value T) string {
 		return names[value]
 	}
 	return fmt.Sprintf("UNKNOWN(%d)", value)
+}
+
+func parseEnum[T ~uint8](names []string, text []byte, value *T) error {
+	i := slices.Index(names, string(text))
+	if i < 0 {
+		return fmt.Errorf("unknown value %q", text)
+	}
+	*value = T(i)
+	return nil
 }

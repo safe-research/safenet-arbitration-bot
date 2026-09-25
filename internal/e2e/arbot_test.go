@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"testing"
@@ -202,6 +204,15 @@ func TestPendingAndInfo(t *testing.T) {
 		stderr := arbot.Fail(t, 1, "classify", ethrpc.Hash{31: 1}.String())
 		if !bytes.Contains(stderr, []byte("request not found")) {
 			t.Errorf("classify: got error %q, want one saying that the request was not found", stderr)
+		}
+
+		// A request that `arbot info -json` wrote classifies the same.
+		path := filepath.Join(t.TempDir(), "request.json")
+		if err := os.WriteFile(path, arbot.Run(t, "info", "-json", frozen.ID.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(arbot.Run(t, "classify", "-request-file", path)); got != "unclassified\n" {
+			t.Errorf("classify -request-file: got output %q, want %q", got, "unclassified\n")
 		}
 	})
 }
