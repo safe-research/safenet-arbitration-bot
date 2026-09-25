@@ -18,7 +18,11 @@ func TestClassify(t *testing.T) {
 		return path
 	}
 	config := write("config.json", "{}")
-	request := write("request.json", `{"id": "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb", "state": "FROZEN"}`)
+	request := write("request.json", `{
+		"id": "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb",
+		"state": "FROZEN",
+		"proposal": {"transaction": {"chainId": 100, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0, "nonce": 0}}
+	}`)
 
 	tests := []struct {
 		args   []string
@@ -31,12 +35,17 @@ func TestClassify(t *testing.T) {
 		{[]string{"-request-file", write("unknown.json", `{"stat": "FROZEN"}`)}, 1, "", `unknown field "stat"`},
 		{[]string{"-request-file", write("state.json", `{"state": "frozen"}`)}, 1, "", `unknown value "frozen"`},
 		{[]string{"-request-file", write("null.json", `null`)}, 1, "", "no request"},
+		{[]string{"-request-file", write("incomplete.json", `{"state": "FROZEN"}`)}, 1, "", "safe transaction has no chainId"},
 		{[]string{"-request-file", filepath.Join(dir, "missing.json")}, 1, "", "no such file"},
 		{[]string{"-request-file", request, "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 		{[]string{}, 2, "", "Usage:"},
-		// There are no checks yet.
-		{[]string{"-list"}, 0, "", ""},
-		{[]string{"-json", "-list"}, 0, "[]\n", ""},
+		{[]string{"-list"}, 0, "out-of-scope  Safe on a network that the Charter doesn't cover\n", ""},
+		{
+			[]string{"-json", "-list"},
+			0,
+			"[\n  {\n    \"verdict\": \"out-of-scope\",\n    \"description\": \"Safe on a network that the Charter doesn't cover\"\n  }\n]\n",
+			"",
+		},
 		{[]string{"-list", "-request-file", request}, 2, "", "mutually exclusive"},
 		{[]string{"-list", "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 	}
