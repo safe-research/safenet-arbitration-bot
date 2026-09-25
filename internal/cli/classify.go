@@ -14,10 +14,12 @@ import (
 func classify(ctx context.Context, e *env, args []string) error {
 	flags := e.flagSet("classify")
 	asJSON := flags.Bool("json", false, "write the classification as JSON")
+	list := flags.Bool("list", false, "list the checks, in the order that they run, instead of classifying a request")
 	requestFile := flags.String("request-file", "", "read the request from the JSON file at `path`, as written by arbot info -json, instead of fetching it")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: %s classify [flags] <request-id>\n", e.progname)
-		fmt.Fprintf(flags.Output(), "       %s classify [flags] -request-file <path>\n\n", e.progname)
+		fmt.Fprintf(flags.Output(), "       %s classify [flags] -request-file <path>\n", e.progname)
+		fmt.Fprintf(flags.Output(), "       %s classify [flags] -list\n\n", e.progname)
 		fmt.Fprintf(flags.Output(), "Classifies a Safenet request with the deterministic checks of the Charter's rules, as one of:\n\n")
 		fmt.Fprintf(flags.Output(), "  unclassified\n  secure\n  insecure  <rule>  <description>\n  out-of-scope  <description>\n\n")
 		flags.PrintDefaults()
@@ -25,10 +27,16 @@ func classify(ctx context.Context, e *env, args []string) error {
 	if err := parse(flags, args, -1); err != nil {
 		return err
 	}
-	// A request file replaces the request ID.
-	if n := flags.NArg(); n != 1 && *requestFile == "" || n != 0 && *requestFile != "" {
+	// A request file or -list replaces the request ID.
+	if *list && *requestFile != "" {
+		return usageError("-list and -request-file are mutually exclusive")
+	}
+	if n := flags.NArg(); n != 1 && !*list && *requestFile == "" || n != 0 && (*list || *requestFile != "") {
 		flags.Usage()
 		return usageError("")
+	}
+	if *list {
+		return listChecks(e, *asJSON)
 	}
 
 	var request *safenet.Request
@@ -55,4 +63,19 @@ func classify(ctx context.Context, e *env, args []string) error {
 	}
 	_, err = fmt.Fprintln(e.stdout, c)
 	return err
+}
+
+// listChecks writes the classification of each check, one per line or as a JSON
+// array, in the order that the checks run.
+func listChecks(e *env, asJSON bool) error {
+	list := checks.List()
+	if asJSON {
+		return writeJSON(e.stdout, list)
+	}
+	for _, c := range list {
+		if _, err := fmt.Fprintln(e.stdout, c); err != nil {
+			return err
+		}
+	}
+	return nil
 }

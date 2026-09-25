@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestClassifyRequestFile(t *testing.T) {
+func TestClassify(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, content string) string {
 		path := filepath.Join(dir, name)
@@ -34,6 +34,11 @@ func TestClassifyRequestFile(t *testing.T) {
 		{[]string{"-request-file", filepath.Join(dir, "missing.json")}, 1, "", "no such file"},
 		{[]string{"-request-file", request, "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 		{[]string{}, 2, "", "Usage:"},
+		// There are no checks yet.
+		{[]string{"-list"}, 0, "", ""},
+		{[]string{"-json", "-list"}, 0, "[]\n", ""},
+		{[]string{"-list", "-request-file", request}, 2, "", "mutually exclusive"},
+		{[]string{"-list", "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 	}
 	for _, test := range tests {
 		var stdout, stderr bytes.Buffer
