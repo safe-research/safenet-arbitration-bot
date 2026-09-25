@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: "lts/*"
 
+      - uses: foundry-rs/foundry-toolchain@v1
+
       - uses: safe-research/actions/install-just@v1
 
       - run: just check

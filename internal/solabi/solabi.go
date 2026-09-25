@@ -29,13 +29,83 @@ func Event(signature string) ethrpc.Hash {
 }
 
 // Call returns the calldata of a call to the function with the given selector,
-// with static arguments.
-func Call(selector [4]byte, args ...Word) ethrpc.Bytes {
-	data := slices.Clone(selector[:])
-	for _, arg := range args {
-		data = append(data, arg[:]...)
+// with args. See Encode for the types of arguments.
+func Call(selector [4]byte, args ...any) ethrpc.Bytes {
+	return append(slices.Clone(selector[:]), Encode(args...)...)
+}
+
+// Tuple is a tuple of values, such as a struct, for Encode.
+type Tuple []any
+
+// Encode returns the ABI encoding of the tuple of values. The Go types of
+// values determine their Solidity types:
+//
+//   - Words and hashes are bytes32.
+//   - Addresses are addresses.
+//   - Bools are bools.
+//   - uint64s and *big.Ints are uint256, which covers every smaller unsigned
+//     integer type as well.
+//   - []bytes are bytes, and strings are strings.
+//   - Tuples are tuples.
+//
+// It panics for other types, and for *big.Ints that aren't uint256s.
+func Encode(values ...any) []byte {
+	var head, tail []byte
+	for _, value := range values {
+		if isDynamic(value) {
+			offset := Uint64(uint64(32*len(values) + len(tail)))
+			head = append(head, offset[:]...)
+			tail = append(tail, encode(value)...)
+		} else {
+			head = append(head, encode(value)...)
+		}
 	}
-	return data
+	return append(head, tail...)
+}
+
+// isDynamic reports whether value is encoded after the head of its tuple.
+func isDynamic(value any) bool {
+	switch value := value.(type) {
+	case []byte, ethrpc.Bytes, string:
+		return true
+	case Tuple:
+		return slices.ContainsFunc(value, isDynamic)
+	}
+	return false
+}
+
+func encode(value any) []byte {
+	var word Word
+	switch value := value.(type) {
+	case Word:
+		word = value
+	case ethrpc.Hash:
+		word = value
+	case ethrpc.Address:
+		word = Address(value)
+	case bool:
+		if value {
+			word[31] = 1
+		}
+	case uint64:
+		word = Uint64(value)
+	case *big.Int:
+		word = Uint(value)
+	case []byte:
+		length := Uint64(uint64(len(value)))
+		padded := make([]byte, (len(value)+31)/32*32)
+		copy(padded, value)
+		return append(length[:], padded...)
+	case ethrpc.Bytes:
+		return encode([]byte(value))
+	case string:
+		return encode([]byte(value))
+	case Tuple:
+		return Encode(value...)
+	default:
+		panic(fmt.Sprintf("solabi: cannot encode %T", value))
+	}
+	return word[:]
 }
 
 // Uint64 encodes an unsigned integer.

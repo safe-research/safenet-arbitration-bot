@@ -1,0 +1,249 @@
+package e2e_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"reflect"
+	"regexp"
+	"testing"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/e2e"
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
+)
+
+// TestPendingAndInfo runs `arbot pending` and `arbot info` against the default
+// Safenet deployment's contracts on anvil, with requests in every state and
+// with every arbitration outcome.
+func TestPendingAndInfo(t *testing.T) {
+	n := e2e.NewTestnet(t)
+	s1, s2, s3 := n.Artifacts.Sentinels[0], n.Artifacts.Sentinels[1], n.Artifacts.Sentinels[2]
+
+	// A dispute that the arbitrator lets time out, which comes first so that its
+	// timeout has passed by the time the pending dispute below is frozen.
+	timedOut := n.Propose(nil)
+	n.Vote(timedOut.Approve(s1), timedOut.Deny(s2, "R-4.1"))
+	n.Mine(n.ArbitrationTimeout)
+	timedOut.TimeoutArbitration()
+
+	// Two proposals in the same block, one ruled insecure and one out of scope.
+	pair := n.ProposeInOneBlock([]byte("insecure"), []byte("out of scope"))
+	insecure, outOfScope := pair[0], pair[1]
+	n.Vote(insecure.Approve(s1), insecure.Deny(s2, "R-4.1"), outOfScope.Approve(s2), outOfScope.Deny(s3, "R-4.2"))
+	insecure.Resolve(false, "ipfs://bafkreidivzimqfqtoqxkrpge6bjyhlvxqs3rhe73owtmdulaxr5do5in7u")
+	outOfScope.MarkOutOfScope("Not a Safe transaction.")
+
+	// A dispute ruled secure.
+	secure := n.Propose(nil)
+	n.Vote(secure.Deny(s1, "R-4.4"), secure.Approve(s2), secure.Deny(s3, "R-4.4"))
+	secure.Resolve(true, "A reasonable allowance.")
+
+	// A unanimous approval, which is never arbitrated.
+	unanimous := n.Propose(nil)
+	n.Vote(unanimous.Approve(s1), unanimous.Approve(s3))
+
+	// A request that times out without a revealed vote.
+	unrevealed := n.Propose(nil)
+	n.Commit(unrevealed.Deny(s2, "R-4.1"))
+	n.MineTo(unrevealed.RevealDeadline + 1)
+	unrevealed.Finalize()
+
+	// The dispute awaiting arbitration.
+	frozen := n.Propose(nil)
+	n.Vote(frozen.Approve(s1), frozen.Deny(s2, "R-4.1"), frozen.Approve(s3))
+
+	// A request that the sentinels are still voting on.
+	pending := n.Propose(nil)
+	n.Commit(pending.Approve(s3))
+
+	arbot := e2e.BuildArbot(t, n.Anvil)
+
+	t.Run("pending", func(t *testing.T) {
+		deadline := frozen.FrozenBlock + n.ArbitrationTimeout
+		want := []safenet.Dispute{{RequestID: frozen.ID, FrozenBlock: frozen.FrozenBlock, Deadline: deadline}}
+		if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json")); !reflect.DeepEqual(got, want) {
+			t.Errorf("pending: got %+v, want %+v", got, want)
+		}
+		text := arbot.Run(t, "pending")
+		if !regexp.MustCompile(fmt.Sprintf(`(?m)^%s +%d +%d$`, frozen.ID, frozen.FrozenBlock, deadline)).Match(text) {
+			t.Errorf("pending: output doesn't list the dispute:\n%s", text)
+		}
+
+		// Before the dispute was frozen, there was none. Anvil only keeps the state of
+		// recent blocks, which this is.
+		block := fmt.Sprint(frozen.FrozenBlock - 1)
+		if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json", "-block", block)); len(got) != 0 {
+			t.Errorf("pending -block %s: got %+v, want none", block, got)
+		}
+	})
+
+	tests := []struct {
+		name    string
+		request *e2e.Request
+		state   string
+		// outcome is empty for a request without an arbitration.
+		outcome string
+	}{
+		{"arbitration timed out", timedOut, "TIMED_OUT", "timed-out"},
+		{"insecure", insecure, "RESOLVED_DENIED", "insecure"},
+		{"out of scope", outOfScope, "TIMED_OUT", "out-of-scope"},
+		{"secure", secure, "RESOLVED_APPROVED", "secure"},
+		{"unanimous", unanimous, "RESOLVED_APPROVED", ""},
+		{"unrevealed", unrevealed, "TIMED_OUT", ""},
+		{"frozen", frozen, "FROZEN", "pending"},
+		{"pending", pending, "PENDING", ""},
+	}
+	for _, test := range tests {
+		t.Run("info "+test.name, func(t *testing.T) {
+			r := test.request
+			got := decode[requestInfo](t, arbot.Run(t, "info", "-json", r.ID.String()))
+			if got.State != test.state {
+				t.Errorf("state: got %s, want %s", got.State, test.state)
+			}
+			// The configuration that fetch-artifacts sets up: a fee of one token, bond and
+			// slashing multipliers of 10 and 1, and a 10% DAO fee share.
+			ether := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+			terms := got.Terms
+			if got.Charter != "charter.safenet-gov.eth" || terms.Bond.Cmp(new(big.Int).Mul(ether, big.NewInt(10))) != 0 ||
+				terms.SlashAmount.Cmp(ether) != 0 || terms.DAOFeeShare != 10_000 {
+				t.Errorf("terms: got Charter %q, bond %s, slash amount %s, and DAO fee share %d, want the fetch-artifacts configuration",
+					got.Charter, terms.Bond, terms.SlashAmount, terms.DAOFeeShare)
+			}
+
+			a := n.Artifacts
+			p := got.Proposal
+			if p.Consensus != a.Consensus || p.Block != r.Block || p.TxHash != r.TxHash || p.Epoch != a.Epoch {
+				t.Errorf("proposal: got Consensus %s, block %d, transaction %s, and epoch %d, want %s, %d, %s, and %d",
+					p.Consensus, p.Block, p.TxHash, p.Epoch, a.Consensus, r.Block, r.TxHash, a.Epoch)
+			}
+			if !bytes.Equal(p.OracleData, r.OracleData) || p.SafeTxHash != r.SafeTxHash {
+				t.Errorf("proposal: got oracle data %s and Safe transaction hash %s, want %s and %s",
+					p.OracleData, p.SafeTxHash, ethrpc.Bytes(r.OracleData), r.SafeTxHash)
+			}
+			if want := canonical(t, r.Transaction); !reflect.DeepEqual(canonical(t, p.Transaction), want) {
+				t.Errorf("Safe transaction: got %s, want %s", p.Transaction, want)
+			}
+
+			var votes []vote
+			for _, b := range r.Ballots {
+				v := vote{Sentinel: b.Sentinel, Vote: "PENDING"}
+				if r.Revealed[b.Sentinel] {
+					v.Vote, v.Reason = "DENIED", b.Reason
+					if b.Approve {
+						v.Vote = "APPROVED"
+					}
+				}
+				votes = append(votes, v)
+			}
+			if !reflect.DeepEqual(got.Votes, votes) {
+				t.Errorf("votes: got %+v, want %+v", got.Votes, votes)
+			}
+
+			if test.outcome == "" {
+				if got.Arbitration != nil {
+					t.Errorf("arbitration: got %+v, want none", got.Arbitration)
+				}
+			} else if arb := got.Arbitration; arb == nil {
+				t.Errorf("arbitration: got none, want outcome %s", test.outcome)
+			} else {
+				want := arbitration{
+					FrozenBlock: r.FrozenBlock,
+					Deadline:    r.FrozenBlock + n.ArbitrationTimeout,
+					Outcome:     test.outcome,
+					Context:     r.Context,
+				}
+				if r.Record != nil {
+					want.Record = &record{Block: uint64(r.Record.BlockNumber), TxHash: r.Record.TransactionHash}
+				}
+				if !reflect.DeepEqual(*arb, want) {
+					t.Errorf("arbitration: got %+v, want %+v", *arb, want)
+				}
+			}
+
+			text := arbot.Run(t, "info", r.ID.String())
+			if !regexp.MustCompile(`(?m)^  State +` + test.state + `$`).Match(text) {
+				t.Errorf("info: output doesn't show state %s:\n%s", test.state, text)
+			}
+		})
+	}
+
+	t.Run("info unknown request", func(t *testing.T) {
+		stderr := arbot.Fail(t, 1, "info", ethrpc.Hash{31: 1}.String())
+		if !bytes.Contains(stderr, []byte("request not found")) {
+			t.Errorf("info: got error %q, want one saying that the request was not found", stderr)
+		}
+	})
+}
+
+// requestInfo is the part of the JSON output of `arbot info` that the test
+// checks.
+type requestInfo struct {
+	Charter string `json:"charter"`
+	State   string `json:"state"`
+	Terms   struct {
+		Bond        *big.Int `json:"bond"`
+		SlashAmount *big.Int `json:"slashAmount"`
+		DAOFeeShare uint32   `json:"daoFeeShare"`
+	} `json:"terms"`
+	Proposal struct {
+		Consensus   ethrpc.Address  `json:"consensus"`
+		Block       uint64          `json:"block"`
+		TxHash      ethrpc.Hash     `json:"txHash"`
+		Epoch       uint64          `json:"epoch"`
+		OracleData  ethrpc.Bytes    `json:"oracleData"`
+		SafeTxHash  ethrpc.Hash     `json:"safeTxHash"`
+		Transaction json.RawMessage `json:"transaction"`
+	} `json:"proposal"`
+	Votes       []vote       `json:"votes"`
+	Arbitration *arbitration `json:"arbitration"`
+}
+
+type vote struct {
+	Sentinel ethrpc.Address `json:"sentinel"`
+	Vote     string         `json:"vote"`
+	Reason   string         `json:"reason"`
+}
+
+type arbitration struct {
+	FrozenBlock uint64  `json:"frozenBlock"`
+	Deadline    uint64  `json:"deadline"`
+	Outcome     string  `json:"outcome"`
+	Context     string  `json:"context"`
+	Record      *record `json:"record"`
+}
+
+type record struct {
+	Block  uint64      `json:"block"`
+	TxHash ethrpc.Hash `json:"txHash"`
+}
+
+// canonical returns the JSON encoding of v decoded into generic values, with
+// numbers kept exact, for comparing JSON documents.
+func canonical(t *testing.T, v any) any {
+	t.Helper()
+	data, ok := v.(json.RawMessage)
+	if !ok {
+		var err error
+		if data, err = json.Marshal(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var result any
+	if err := decoder.Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func decode[T any](t *testing.T, data []byte) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatalf("decoding %s: %v", data, err)
+	}
+	return v
+}

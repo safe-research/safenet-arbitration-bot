@@ -13,6 +13,7 @@ import (
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/keccak256"
+	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 )
 
 // Registry is the address of the ENS registry on Ethereum Mainnet.
@@ -20,8 +21,8 @@ var Registry = mustParseAddress("0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e")
 
 // Function selectors of the registry and resolver methods that Resolve calls.
 var (
-	resolverSelector    = []byte{0x01, 0x78, 0xb8, 0xbf} // resolver(bytes32)
-	contenthashSelector = []byte{0xbc, 0x1c, 0x58, 0xd1} // contenthash(bytes32)
+	resolverSelector    = solabi.Selector("resolver(bytes32)")
+	contenthashSelector = solabi.Selector("contenthash(bytes32)")
 )
 
 // Client resolves ENS names using an Ethereum Mainnet node.
@@ -51,7 +52,7 @@ func (c *Client) Resolve(ctx context.Context, name string, block ethrpc.BlockNum
 	}
 	node := Namehash(name)
 
-	result, err := c.eth.Call(ctx, ethrpc.CallRequest{To: Registry, Data: calldata(resolverSelector, node)}, block)
+	result, err := c.eth.Call(ctx, ethrpc.CallRequest{To: Registry, Data: solabi.Call(resolverSelector, node)}, block)
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: getting resolver: %w", name, err)
 	}
@@ -63,7 +64,7 @@ func (c *Client) Resolve(ctx context.Context, name string, block ethrpc.BlockNum
 		return "", fmt.Errorf("resolving %s: name has no resolver", name)
 	}
 
-	result, err = c.eth.Call(ctx, ethrpc.CallRequest{To: resolver, Data: calldata(contenthashSelector, node)}, block)
+	result, err = c.eth.Call(ctx, ethrpc.CallRequest{To: resolver, Data: solabi.Call(contenthashSelector, node)}, block)
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: getting content hash: %w", name, err)
 	}
@@ -94,11 +95,6 @@ func Namehash(name string) [32]byte {
 		node = keccak256.Hash(node[:], labelHash[:])
 	}
 	return node
-}
-
-// calldata ABI-encodes a call to a function taking a single bytes32 argument.
-func calldata(selector []byte, node [32]byte) ethrpc.Bytes {
-	return append(bytes.Clone(selector), node[:]...)
 }
 
 // decodeAddress decodes an ABI-encoded address return value.

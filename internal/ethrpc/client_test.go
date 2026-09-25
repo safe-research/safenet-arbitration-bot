@@ -219,6 +219,31 @@ func TestGetLogs(t *testing.T) {
 	}
 }
 
+func TestRawRequest(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "anvil_mine", "params": ["0x2"]}`,
+		`{"result": null}`,
+	)
+	if err := client.RawRequest(t.Context(), nil, "anvil_mine", Quantity(2)); err != nil {
+		t.Fatalf("RawRequest: %v", err)
+	}
+}
+
+func TestCode(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getCode", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
+		`{"result": "0x6080"}`,
+	)
+
+	code, err := client.Code(t.Context(), Address{19: 0xaa}, 16)
+	if err != nil {
+		t.Fatalf("Code: %v", err)
+	}
+	if !bytes.Equal(code, []byte{0x60, 0x80}) {
+		t.Errorf("Code: got %s, want 0x6080", code)
+	}
+}
+
 func TestBlockByNumber(t *testing.T) {
 	client := serve(t,
 		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,

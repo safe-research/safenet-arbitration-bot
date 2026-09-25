@@ -67,7 +67,7 @@ func NewClient(ctx context.Context, chainID uint64, url string) (*Client, error)
 // chain.
 func (c *Client) checkChainID(ctx context.Context) error {
 	var chainID Quantity
-	if err := c.request(ctx, &chainID, "eth_chainId"); err != nil {
+	if err := c.RawRequest(ctx, &chainID, "eth_chainId"); err != nil {
 		return fmt.Errorf("%s: %w", c.url, err)
 	}
 	if uint64(chainID) != c.chainID {
@@ -85,7 +85,7 @@ func (c *Client) ChainID() uint64 {
 // creating a transaction (eth_call), and returns the call's return data.
 func (c *Client) Call(ctx context.Context, call CallRequest, block BlockNumber) (Bytes, error) {
 	var result Bytes
-	err := c.request(ctx, &result, "eth_call", call, block)
+	err := c.RawRequest(ctx, &result, "eth_call", call, block)
 	return result, err
 }
 
@@ -93,7 +93,14 @@ func (c *Client) Call(ctx context.Context, call CallRequest, block BlockNumber) 
 // (eth_blockNumber).
 func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
 	var result BlockNumber
-	err := c.request(ctx, &result, "eth_blockNumber")
+	err := c.RawRequest(ctx, &result, "eth_blockNumber")
+	return result, err
+}
+
+// Code returns the code of the contract at address as of block (eth_getCode).
+func (c *Client) Code(ctx context.Context, address Address, block BlockNumber) (Bytes, error) {
+	var result Bytes
+	err := c.RawRequest(ctx, &result, "eth_getCode", address, block)
 	return result, err
 }
 
@@ -101,7 +108,7 @@ func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
 // the block range of a single request, see ScanLogs for querying wider ranges.
 func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
 	var result []Log
-	err := c.request(ctx, &result, "eth_getLogs", filter)
+	err := c.RawRequest(ctx, &result, "eth_getLogs", filter)
 	return result, err
 }
 
@@ -109,7 +116,7 @@ func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
 // (eth_getBlockByNumber).
 func (c *Client) BlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {
 	var result *Block
-	if err := c.request(ctx, &result, "eth_getBlockByNumber", number, false); err != nil {
+	if err := c.RawRequest(ctx, &result, "eth_getBlockByNumber", number, false); err != nil {
 		return Block{}, err
 	}
 	if result == nil {
@@ -131,9 +138,11 @@ type response struct {
 	Error  *Error          `json:"error"`
 }
 
-// request calls method with params and decodes its result into result. A
-// JSON-RPC error response is returned as an *Error.
-func (c *Client) request(ctx context.Context, result any, method string, params ...any) error {
+// RawRequest calls method with params, and decodes its result into result
+// unless result is nil. It is for methods that the client has no function for,
+// such as a node's own methods. A JSON-RPC error response is returned as an
+// *Error.
+func (c *Client) RawRequest(ctx context.Context, result any, method string, params ...any) error {
 	if params == nil {
 		params = []any{}
 	}
@@ -177,6 +186,9 @@ func (c *Client) request(ctx context.Context, result any, method string, params 
 	}
 	if len(res.Result) == 0 {
 		return fmt.Errorf("%s: response has neither result nor error", method)
+	}
+	if result == nil {
+		return nil
 	}
 	if err := json.Unmarshal(res.Result, result); err != nil {
 		return fmt.Errorf("%s: decoding result: %w", method, err)
