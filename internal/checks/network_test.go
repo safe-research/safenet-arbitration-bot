@@ -18,7 +18,7 @@ func TestOffNetwork(t *testing.T) {
 		{new(big.Int).Lsh(big.NewInt(1), 64), true},
 	}
 	for _, test := range tests {
-		got, err := offNetwork.fn(t.Context(), &safeID{chainID: test.chainID}, call{})
+		got, err := offNetwork.fn(t.Context(), nil, &safeID{chainID: test.chainID}, call{})
 		if got != test.want || err != nil {
 			t.Errorf("offNetwork for chain %d = %t, %v; want %t", test.chainID, got, err, test.want)
 		}

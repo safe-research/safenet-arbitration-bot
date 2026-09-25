@@ -32,7 +32,7 @@ func info(ctx context.Context, e *env, args []string) error {
 		return usageError(fmt.Sprintf("request ID %q: %v", flags.Arg(0), err))
 	}
 
-	request, err := openSafenet(e.cfg).Request(ctx, id)
+	request, err := openSafenet(e.cfg, ethrpc.NewDialer(e.cfg.RPCs)).Request(ctx, id)
 	if err != nil {
 		return err
 	}

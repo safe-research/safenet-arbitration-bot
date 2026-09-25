@@ -35,8 +35,9 @@ var blockTimes = map[uint64]uint64{ethrpc.Mainnet: 12, ethrpc.Gnosis: 5}
 // installed, or in short mode.
 //
 // The node only keeps the state of the latest block, so calls at older blocks
-// fail. Keeping history would make mining an order of magnitude slower, as
-// anvil would snapshot the state of every block.
+// fail, unless args has its own --prune-history=N flag, which keeps the states
+// of the last N blocks. Keeping history makes mining several times slower, as
+// anvil snapshots the state of every block.
 func StartAnvil(tb testing.TB, chainID uint64, args ...string) *Anvil {
 	tb.Helper()
 	if testing.Short() {
@@ -51,7 +52,12 @@ func StartAnvil(tb testing.TB, chainID uint64, args ...string) *Anvil {
 	if !ok {
 		tb.Fatalf("no block time for chain %d", chainID)
 	}
-	args = append([]string{"--chain-id", fmt.Sprint(chainID), "--port", "0", "--auto-impersonate", "--prune-history"}, args...)
+	prune := "--prune-history"
+	if slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "--prune-history") }) {
+		prune = ""
+	}
+	args = append([]string{"--chain-id", fmt.Sprint(chainID), "--port", "0", "--auto-impersonate", prune}, args...)
+	args = slices.DeleteFunc(args, func(arg string) bool { return arg == "" })
 	// The test's context is canceled before its cleanup functions run, which kills
 	// anvil.
 	cmd := exec.CommandContext(tb.Context(), path, args...)
@@ -117,7 +123,7 @@ func (a *Anvil) blockNumber() ethrpc.BlockNumber {
 // Header returns the header of block number.
 func (a *Anvil) Header(number uint64) ethrpc.Block {
 	a.tb.Helper()
-	block, err := a.BlockByNumber(a.tb.Context(), ethrpc.BlockNumber(number))
+	block, err := a.GetBlockByNumber(a.tb.Context(), ethrpc.BlockNumber(number))
 	if err != nil {
 		a.tb.Fatal(err)
 	}

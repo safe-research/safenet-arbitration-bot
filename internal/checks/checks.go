@@ -5,10 +5,12 @@ package checks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 )
 
@@ -69,7 +71,18 @@ type check struct {
 	description string
 	// fn reports whether a call that the Safe makes is in the check's class. The
 	// check abstains on the call if it isn't.
-	fn func(ctx context.Context, safe *safeID, c call) (bool, error)
+	fn func(ctx context.Context, env *env, safe *safeID, c call) (bool, error)
+}
+
+// env is the environment that checks run in, from which they read the state of
+// the Safe's chain.
+type env struct {
+	// dial connects to a chain.
+	dial ethrpc.Dialer
+	// block is the last block on the Safe's chain before the proposal. Checks read
+	// the chain's state at this block, without the effects of the transaction or of
+	// anything later (Charter § 2.8 and § 3.6).
+	block uint64
 }
 
 func (c check) classification() Classification {
@@ -78,7 +91,7 @@ func (c check) classification() Classification {
 
 // checks are the checks that Classify runs, in the order that it runs them.
 // They are grouped by verdict, in verdictOrder.
-var checks = []check{offNetwork, emptyMultiSendCheck, invalidMultiSendCheck}
+var checks = []check{offNetwork, unsupportedSafe, emptyMultiSendCheck, invalidMultiSendCheck}
 
 // verdictOrder is the order of the verdicts of checks: a request that is out of
 // scope gets no security ruling, and a request that fails a rule is insecure,
@@ -99,25 +112,31 @@ func List() []Classification {
 // order, on each call that the Safe makes, and returns the classification of
 // the first one that matches a call. If none do, and a secure check matches
 // every call, the request is secure, with the descriptions of the first secure
-// check that matches each call. Otherwise, it is Unclassified.
-func Classify(ctx context.Context, request *safenet.Request) (Classification, error) {
-	return classify(ctx, checks, request)
+// check that matches each call. Otherwise, it is Unclassified. Checks read the
+// state of the Safe's chain at the proposal's SafeBlock, connecting with dial.
+func Classify(ctx context.Context, dial ethrpc.Dialer, request *safenet.Request) (Classification, error) {
+	return classify(ctx, checks, dial, request)
 }
 
 // classify is Classify with checks, which must be grouped by verdict in
-// verdictOrder.
-func classify(ctx context.Context, checks []check, request *safenet.Request) (Classification, error) {
+// verdictOrder. It returns an error if the proposal has no SafeBlock, as a
+// request read from a file can lack, rather than read the genesis state.
+func classify(ctx context.Context, checks []check, dial ethrpc.Dialer, request *safenet.Request) (Classification, error) {
 	tx, err := components(&request.Proposal.Transaction)
 	if err != nil {
 		return Classification{}, err
 	}
+	if request.Proposal.SafeBlock == 0 {
+		return Classification{}, errors.New("proposal has no safeBlock")
+	}
+	env := &env{dial: dial, block: request.Proposal.SafeBlock}
 	secure := slices.IndexFunc(checks, func(c check) bool { return c.verdict == Secure })
 	if secure < 0 {
 		secure = len(checks)
 	}
 	for _, c := range checks[:secure] {
 		for _, call := range tx.calls {
-			match, err := c.match(ctx, &tx.safe, call)
+			match, err := c.match(ctx, env, &tx.safe, call)
 			if err != nil {
 				return Classification{}, err
 			}
@@ -129,7 +148,7 @@ func classify(ctx context.Context, checks []check, request *safenet.Request) (Cl
 
 	var descriptions []string
 	for _, call := range tx.calls {
-		i, err := firstMatch(ctx, checks[secure:], &tx.safe, call)
+		i, err := firstMatch(ctx, checks[secure:], env, &tx.safe, call)
 		if err != nil || i < 0 {
 			return Classification{}, err
 		}
@@ -142,9 +161,9 @@ func classify(ctx context.Context, checks []check, request *safenet.Request) (Cl
 
 // firstMatch returns the index of the first of checks that matches c, or -1 if
 // none do.
-func firstMatch(ctx context.Context, checks []check, safe *safeID, c call) (int, error) {
+func firstMatch(ctx context.Context, checks []check, env *env, safe *safeID, c call) (int, error) {
 	for i, check := range checks {
-		if match, err := check.match(ctx, safe, c); err != nil || match {
+		if match, err := check.match(ctx, env, safe, c); err != nil || match {
 			return i, err
 		}
 	}
@@ -152,8 +171,8 @@ func firstMatch(ctx context.Context, checks []check, safe *safeID, c call) (int,
 }
 
 // match reports whether c is in the check's class.
-func (c check) match(ctx context.Context, safe *safeID, call call) (bool, error) {
-	match, err := c.fn(ctx, safe, call)
+func (c check) match(ctx context.Context, env *env, safe *safeID, call call) (bool, error) {
+	match, err := c.fn(ctx, env, safe, call)
 	if err != nil {
 		return false, fmt.Errorf("check %q: %w", c.classification(), err)
 	}

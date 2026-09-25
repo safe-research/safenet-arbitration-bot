@@ -16,7 +16,7 @@ var networks = []uint64{ethrpc.Mainnet, ethrpc.ArbitrumOne, ethrpc.Gnosis}
 var offNetwork = check{
 	verdict:     OutOfScope,
 	description: "Safe on a network that the Charter doesn't cover",
-	fn: func(_ context.Context, safe *safeID, _ call) (bool, error) {
+	fn: func(_ context.Context, _ *env, safe *safeID, _ call) (bool, error) {
 		return !slices.ContainsFunc(networks, func(n uint64) bool {
 			return safe.chainID.IsUint64() && safe.chainID.Uint64() == n
 		}), nil

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"text/tabwriter"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
 // pending lists the disputed Safenet requests awaiting arbitration.
@@ -19,7 +21,7 @@ func pending(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 
-	disputes, err := openSafenet(e.cfg).Pending(ctx)
+	disputes, err := openSafenet(e.cfg, ethrpc.NewDialer(e.cfg.RPCs)).Pending(ctx)
 	if err != nil {
 		return err
 	}

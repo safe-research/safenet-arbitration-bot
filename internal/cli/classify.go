@@ -40,6 +40,9 @@ func classify(ctx context.Context, e *env, args []string) error {
 		return listChecks(e, *asJSON)
 	}
 
+	// The request and the checks share connections to chains, such as to Gnosis
+	// Chain for a Safe on it.
+	dial := ethrpc.NewDialer(e.cfg.RPCs)
 	var request *safenet.Request
 	var err error
 	if *requestFile != "" {
@@ -49,12 +52,12 @@ func classify(ctx context.Context, e *env, args []string) error {
 		if id, err = ethrpc.ParseHash(flags.Arg(0)); err != nil {
 			return usageError(fmt.Sprintf("request ID %q: %v", flags.Arg(0), err))
 		}
-		request, err = openSafenet(e.cfg).Request(ctx, id)
+		request, err = openSafenet(e.cfg, dial).Request(ctx, id)
 	}
 	if err != nil {
 		return err
 	}
-	c, err := checks.Classify(ctx, request)
+	c, err := checks.Classify(ctx, dial, request)
 	if err != nil {
 		return err
 	}

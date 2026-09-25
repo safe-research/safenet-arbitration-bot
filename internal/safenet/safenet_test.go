@@ -190,7 +190,7 @@ func (f *fixture) header(ctx context.Context, chainID uint64, number ethrpc.Bloc
 	if err != nil {
 		return ethrpc.Block{}, err
 	}
-	block, err := eth.BlockByNumber(ctx, number)
+	block, err := eth.GetBlockByNumber(ctx, number)
 	if err != nil {
 		return ethrpc.Block{}, err
 	}

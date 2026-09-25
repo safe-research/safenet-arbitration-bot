@@ -318,7 +318,7 @@ func (s *session) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (P
 		if hash := proposal.Transaction.Hash(); hash != proposal.SafeTxHash {
 			return Proposal{}, fmt.Errorf("proposal in transaction %s: Safe transaction hashes to %s, but the log has %s", log.TransactionHash, hash, proposal.SafeTxHash)
 		}
-		header, err := s.eth.BlockByNumber(ctx, log.BlockNumber)
+		header, err := s.eth.GetBlockByNumber(ctx, log.BlockNumber)
 		if err != nil {
 			return Proposal{}, fmt.Errorf("getting proposal block: %w", err)
 		}
@@ -372,7 +372,7 @@ func (s *session) proposalBlocks(ctx context.Context, p *Proposal) error {
 // proposal. Gnosis Chain gives each block a later timestamp than its parent, so
 // this is the proposal block's parent. The search is for chains that don't.
 func (s *session) parentBlock(ctx context.Context, p *Proposal) (uint64, error) {
-	parent, err := s.eth.BlockByNumber(ctx, ethrpc.BlockNumber(p.Block-1))
+	parent, err := s.eth.GetBlockByNumber(ctx, ethrpc.BlockNumber(p.Block-1))
 	if err != nil {
 		return 0, fmt.Errorf("getting the block before the proposal: %w", err)
 	}

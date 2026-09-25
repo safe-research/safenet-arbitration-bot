@@ -282,7 +282,7 @@ func (c *chain) callAddress(ctx context.Context, to ethrpc.Address, signature st
 // account returns an account with the code of the contract at address, and
 // empty storage.
 func (c *chain) account(ctx context.Context, address ethrpc.Address) (*Account, error) {
-	code, err := c.eth.Code(ctx, address, c.block)
+	code, err := c.eth.GetCode(ctx, address, c.block)
 	if err != nil {
 		return nil, fmt.Errorf("getting code of %s: %w", address, err)
 	}

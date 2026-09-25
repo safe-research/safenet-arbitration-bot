@@ -19,14 +19,14 @@ func (c *Client) SearchBlock(ctx context.Context, t time.Time) (Block, error) {
 		return Block{}, err
 	}
 	// The search keeps lo before t, and hi at or after t.
-	hi, err := c.BlockByNumber(ctx, latest)
+	hi, err := c.GetBlockByNumber(ctx, latest)
 	if err != nil {
 		return Block{}, err
 	}
 	if hi.Time().Before(t) {
 		return Block{}, fmt.Errorf("searching for the last block before %s: the latest block %d is at %s", t.Format(time.RFC3339), hi.Number, hi.Time().Format(time.RFC3339))
 	}
-	lo, err := c.BlockByNumber(ctx, 0)
+	lo, err := c.GetBlockByNumber(ctx, 0)
 	if err != nil {
 		return Block{}, err
 	}
@@ -51,7 +51,7 @@ func (c *Client) SearchBlock(ctx context.Context, t time.Time) (Block, error) {
 		}
 		n = min(max(n, lo.Number+1), hi.Number-1)
 
-		b, err := c.BlockByNumber(ctx, n)
+		b, err := c.GetBlockByNumber(ctx, n)
 		if err != nil {
 			return Block{}, err
 		}

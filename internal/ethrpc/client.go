@@ -97,10 +97,19 @@ func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
 	return result, err
 }
 
-// Code returns the code of the contract at address as of block (eth_getCode).
-func (c *Client) Code(ctx context.Context, address Address, block BlockNumber) (Bytes, error) {
+// GetCode returns the code of the contract at address as of block
+// (eth_getCode).
+func (c *Client) GetCode(ctx context.Context, address Address, block BlockNumber) (Bytes, error) {
 	var result Bytes
 	err := c.RawRequest(ctx, &result, "eth_getCode", address, block)
+	return result, err
+}
+
+// GetStorageAt returns the value of the storage slot of the contract at address
+// as of block (eth_getStorageAt).
+func (c *Client) GetStorageAt(ctx context.Context, address Address, slot Hash, block BlockNumber) (Hash, error) {
+	var result Hash
+	err := c.RawRequest(ctx, &result, "eth_getStorageAt", address, slot, block)
 	return result, err
 }
 
@@ -112,9 +121,9 @@ func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
 	return result, err
 }
 
-// BlockByNumber returns the header of the block with the given number
+// GetBlockByNumber returns the header of the block with the given number
 // (eth_getBlockByNumber).
-func (c *Client) BlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {
+func (c *Client) GetBlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {
 	var result *Block
 	if err := c.RawRequest(ctx, &result, "eth_getBlockByNumber", number, false); err != nil {
 		return Block{}, err

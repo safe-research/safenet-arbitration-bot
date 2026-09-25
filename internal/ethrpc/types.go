@@ -75,6 +75,16 @@ func ParseHash(s string) (Hash, error) {
 	return h, err
 }
 
+// MustParseHash is like ParseHash, but panics if s is not a hash. It is for
+// hashes in the source code.
+func MustParseHash(s string) Hash {
+	h, err := ParseHash(s)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
 // String returns the hash as lowercase 0x-prefixed hex.
 func (h Hash) String() string {
 	return encodeHex(h[:])

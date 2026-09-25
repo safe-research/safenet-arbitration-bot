@@ -72,7 +72,7 @@ func TestClassify(t *testing.T) {
 		if verdict == Insecure {
 			c.rule = "R-4.1"
 		}
-		c.fn = func(_ context.Context, _ *safeID, call call) (bool, error) { return fn(call) }
+		c.fn = func(_ context.Context, _ *env, _ *safeID, call call) (bool, error) { return fn(call) }
 		return c
 	}
 	to := func(address ethrpc.Address) func(c call) (bool, error) {
@@ -155,7 +155,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := classify(t.Context(), test.checks, request(test.tx))
+			got, err := classify(t.Context(), test.checks, nil, request(test.tx))
 			if got != test.want || !errors.Is(err, test.err) {
 				t.Errorf("classify() = %+v, %v; want %+v, %v", got, err, test.want, test.err)
 			}
@@ -163,8 +163,12 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// request returns a request for tx, with a missing chain ID set to that of
-// Ethereum Mainnet, and any other missing amounts set to zero.
+// testSafeBlock is the Safe chain block of the requests that request returns.
+const testSafeBlock = 42
+
+// request returns a request for tx, proposed after testSafeBlock on the Safe's
+// chain, with a missing chain ID set to that of Ethereum Mainnet, and any other
+// missing amounts set to zero.
 func request(tx safenet.SafeTransaction) *safenet.Request {
 	if tx.ChainID == nil {
 		tx.ChainID = big.NewInt(ethrpc.Mainnet)
@@ -174,13 +178,21 @@ func request(tx safenet.SafeTransaction) *safenet.Request {
 			*amount = new(big.Int)
 		}
 	}
-	return &safenet.Request{Proposal: safenet.Proposal{Transaction: tx}}
+	return &safenet.Request{Proposal: safenet.Proposal{SafeBlock: testSafeBlock, Transaction: tx}}
 }
 
 func TestClassifyMissingAmount(t *testing.T) {
 	r := request(safenet.SafeTransaction{})
 	r.Proposal.Transaction.GasPrice = nil
-	if _, err := classify(t.Context(), nil, r); err == nil || !strings.Contains(err.Error(), "gasPrice") {
+	if _, err := classify(t.Context(), nil, nil, r); err == nil || !strings.Contains(err.Error(), "gasPrice") {
 		t.Errorf("classify() = _, %v; want an error for the missing gasPrice", err)
+	}
+}
+
+func TestClassifyMissingSafeBlock(t *testing.T) {
+	r := request(safenet.SafeTransaction{})
+	r.Proposal.SafeBlock = 0
+	if _, err := classify(t.Context(), nil, nil, r); err == nil || !strings.Contains(err.Error(), "safeBlock") {
+		t.Errorf("classify() = _, %v; want an error for the missing safeBlock", err)
 	}
 }

@@ -192,7 +192,7 @@ func TestPendingAndInfo(t *testing.T) {
 		}
 	})
 
-	// There are no checks yet, so every request is unclassified.
+	// The Safe is a Safe 1.3.0, and no check decides its transaction.
 	t.Run("classify", func(t *testing.T) {
 		got := decode[map[string]any](t, arbot.Run(t, "classify", "-json", frozen.ID.String()))
 		if want := map[string]any{"verdict": nil}; !reflect.DeepEqual(got, want) {
@@ -213,6 +213,24 @@ func TestPendingAndInfo(t *testing.T) {
 		}
 		if got := string(arbot.Run(t, "classify", "-request-file", path)); got != "unclassified\n" {
 			t.Errorf("classify -request-file: got output %q, want %q", got, "unclassified\n")
+		}
+
+		// The same transaction by an account that isn't a Safe is out of scope.
+		var request map[string]any
+		if err := json.Unmarshal(arbot.Run(t, "info", "-json", frozen.ID.String()), &request); err != nil {
+			t.Fatal(err)
+		}
+		request["proposal"].(map[string]any)["transaction"].(map[string]any)["safe"] = ethrpc.Address{19: 1}.String()
+		data, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		const want = "out-of-scope  account that isn't a Safe of a version that the Charter covers\n"
+		if got := string(arbot.Run(t, "classify", "-request-file", path)); got != want {
+			t.Errorf("classify -request-file for another account: got output %q, want %q", got, want)
 		}
 	})
 }

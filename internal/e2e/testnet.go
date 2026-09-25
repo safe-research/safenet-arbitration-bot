@@ -24,8 +24,9 @@ var (
 // Testnet runs Safenet requests on anvil. It embeds the Gnosis Chain node.
 type Testnet struct {
 	*Anvil
-	// Mainnet is an Ethereum Mainnet node without contracts, for finding the
-	// Mainnet blocks before proposals.
+	// Mainnet is an Ethereum Mainnet node with only the Safe, for finding the
+	// Mainnet blocks before proposals. It keeps the states of its recent blocks, so
+	// that arbot can read the Safe at the block before a recent proposal.
 	Mainnet   *Anvil
 	Artifacts *Artifacts
 	// Sponsor proposes the transactions and pays their fees.
@@ -38,16 +39,32 @@ type Testnet struct {
 	nonce uint64
 }
 
+// safe is the Safe that proposes the transactions, on both chains.
+var safe = ethrpc.Address{0: 0x5a, 19: 0xfe}
+
+// safeProxy is the code of the SafeProxy of Safe 1.3.0, which delegates calls
+// to the singleton in its storage slot 0. The Safe has it on both nodes, with
+// singleton, so that it is a Safe of a version that the Charter covers.
+const safeProxy = "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea2646970667358221220d1429297349653a4918076d650332de1a1068c5f3e07c5c82360c277770b955264736f6c63430007060033"
+
+var singleton = ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552")
+
 // NewTestnet starts a Gnosis Chain anvil node with the artifacts installed, and
 // funds the sponsor, the sentinels, and the arbitrator. It also starts an
-// Ethereum Mainnet node, whose genesis block is an hour earlier. It skips the
-// test if anvil isn't installed, or in short mode.
+// Ethereum Mainnet node, whose genesis block is an hour earlier. Both have the
+// Safe. It skips the test if anvil isn't installed, or in short mode.
 func NewTestnet(tb testing.TB) *Testnet {
 	tb.Helper()
-	mainnet := StartAnvil(tb, ethrpc.Mainnet, "--timestamp", fmt.Sprint(time.Now().Add(-time.Hour).Unix()))
+	mainnet := StartAnvil(tb, ethrpc.Mainnet, "--prune-history=128", "--timestamp", fmt.Sprint(time.Now().Add(-time.Hour).Unix()))
 	node := StartAnvil(tb, ethrpc.Gnosis)
 	a := LoadArtifacts(tb)
 	node.Install(a)
+	var slot0 ethrpc.Hash
+	copy(slot0[12:], singleton[:])
+	for _, n := range []*Anvil{mainnet, node} {
+		n.rpc(nil, "anvil_setCode", safe, safeProxy)
+		n.rpc(nil, "anvil_setStorageAt", safe, ethrpc.Hash{}, slot0)
+	}
 	n := &Testnet{Anvil: node, Mainnet: mainnet, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}
 	n.ArbitrationTimeout = n.callUint64("ARBITRATION_TIMEOUT()")
 
@@ -183,7 +200,6 @@ func (n *Testnet) ProposeInOneBlock(oracleData ...[]byte) []*Request {
 func (n *Testnet) transaction() *safenet.SafeTransaction {
 	n.nonce++
 	i := byte(n.nonce)
-	safe := ethrpc.Address{0: 0x5a, 19: 0xfe}
 	chainID := int64(ethrpc.Mainnet)
 	if i%3 == 0 {
 		chainID = ethrpc.Gnosis

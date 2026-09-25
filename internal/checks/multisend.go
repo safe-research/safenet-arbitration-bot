@@ -67,7 +67,7 @@ func emptyMultiSend(to ethrpc.Address) call {
 var emptyMultiSendCheck = check{
 	verdict:     Secure,
 	description: "MultiSend that makes no calls",
-	fn: func(_ context.Context, _ *safeID, c call) (bool, error) {
+	fn: func(_ context.Context, _ *env, _ *safeID, c call) (bool, error) {
 		_, ok := multiSends[c.to]
 		return ok && c.equal(emptyMultiSend(c.to)), nil
 	},
@@ -80,7 +80,7 @@ var emptyMultiSendCheck = check{
 var invalidMultiSendCheck = check{
 	verdict:     Secure,
 	description: "MultiSend call that always reverts",
-	fn: func(_ context.Context, _ *safeID, c call) (bool, error) {
+	fn: func(_ context.Context, _ *env, _ *safeID, c call) (bool, error) {
 		_, ok := multiSends[c.to]
 		return ok && c.equal(revertingMultiSend(c.to)), nil
 	},

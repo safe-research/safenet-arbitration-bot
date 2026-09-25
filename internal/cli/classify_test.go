@@ -23,10 +23,15 @@ func TestClassify(t *testing.T) {
 		return path
 	}
 	config := write("config.json", "{}")
+	// The request is on a network that the Charter doesn't cover, which the checks
+	// decide without reading the chain.
 	request := write("request.json", `{
 		"id": "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb",
 		"state": "FROZEN",
-		"proposal": {"transaction": {"chainId": 100, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0, "nonce": 0}}
+		"proposal": {
+			"safeBlock": 1,
+			"transaction": {"chainId": 10, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0, "nonce": 0}
+		}
 	}`)
 
 	// The list is that of the checks package, as a table or as JSON.
@@ -41,12 +46,23 @@ func TestClassify(t *testing.T) {
 		stdout string
 		stderr string
 	}{
-		{[]string{"-request-file", request}, 0, "unclassified\n", ""},
-		{[]string{"-json", "-request-file", request}, 0, "{\n  \"verdict\": null\n}\n", ""},
+		{[]string{"-request-file", request}, 0, "out-of-scope  Safe on a network that the Charter doesn't cover\n", ""},
+		{
+			[]string{"-json", "-request-file", request},
+			0,
+			"{\n  \"verdict\": \"out-of-scope\",\n  \"description\": \"Safe on a network that the Charter doesn't cover\"\n}\n",
+			"",
+		},
 		{[]string{"-request-file", write("unknown.json", `{"stat": "FROZEN"}`)}, 1, "", `unknown field "stat"`},
 		{[]string{"-request-file", write("state.json", `{"state": "frozen"}`)}, 1, "", `unknown value "frozen"`},
 		{[]string{"-request-file", write("null.json", `null`)}, 1, "", "no request"},
 		{[]string{"-request-file", write("incomplete.json", `{"state": "FROZEN"}`)}, 1, "", "safe transaction has no chainId"},
+		{
+			[]string{"-request-file", write("no-block.json", `{"proposal": {"transaction": {"chainId": 10, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0}}}`)},
+			1,
+			"",
+			"proposal has no safeBlock",
+		},
 		{[]string{"-request-file", filepath.Join(dir, "missing.json")}, 1, "", "no such file"},
 		{[]string{"-request-file", request, "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 		{[]string{}, 2, "", "Usage:"},

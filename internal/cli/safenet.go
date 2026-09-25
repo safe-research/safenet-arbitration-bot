@@ -13,11 +13,11 @@ import (
 )
 
 // openSafenet returns a Safenet that reads the configured SentinelOracle and
-// Consensus contracts on Gnosis Chain, using the configured RPCs.
-func openSafenet(cfg config.Config) *safenet.Safenet {
+// Consensus contracts on Gnosis Chain, connecting to chains with dial.
+func openSafenet(cfg config.Config, dial ethrpc.Dialer) *safenet.Safenet {
 	oracle := cmp.Or(cfg.Oracle, safenet.DefaultOracle)
 	consensus := cmp.Or(cfg.Consensus, safenet.DefaultConsensus)
-	return safenet.New(ethrpc.NewDialer(cfg.RPCs), oracle, consensus)
+	return safenet.New(dial, oracle, consensus)
 }
 
 // writeJSON writes v to w as indented JSON.

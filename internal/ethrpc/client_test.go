@@ -229,22 +229,45 @@ func TestRawRequest(t *testing.T) {
 	}
 }
 
-func TestCode(t *testing.T) {
+func TestGetCode(t *testing.T) {
 	client := serve(t,
 		`{"jsonrpc": "2.0", "method": "eth_getCode", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
 		`{"result": "0x6080"}`,
 	)
 
-	code, err := client.Code(t.Context(), Address{19: 0xaa}, 16)
+	code, err := client.GetCode(t.Context(), Address{19: 0xaa}, 16)
 	if err != nil {
-		t.Fatalf("Code: %v", err)
+		t.Fatalf("GetCode: %v", err)
 	}
 	if !bytes.Equal(code, []byte{0x60, 0x80}) {
-		t.Errorf("Code: got %s, want 0x6080", code)
+		t.Errorf("GetCode: got %s, want 0x6080", code)
 	}
 }
 
-func TestBlockByNumber(t *testing.T) {
+func TestGetStorageAt(t *testing.T) {
+	client := serve(t,
+		`{
+			"jsonrpc": "2.0",
+			"method": "eth_getStorageAt",
+			"params": [
+				"0x00000000000000000000000000000000000000aa",
+				"0x0000000000000000000000000000000000000000000000000000000000000001",
+				"0x10"
+			]
+		}`,
+		`{"result": "0x0000000000000000000000000000000000000000000000000000000000000abc"}`,
+	)
+
+	value, err := client.GetStorageAt(t.Context(), Address{19: 0xaa}, Hash{31: 1}, 16)
+	if err != nil {
+		t.Fatalf("GetStorageAt: %v", err)
+	}
+	if want := (Hash{30: 0x0a, 31: 0xbc}); value != want {
+		t.Errorf("GetStorageAt: got %s, want %s", value, want)
+	}
+}
+
+func TestGetBlockByNumber(t *testing.T) {
 	client := serve(t,
 		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,
 		`{"result": {
@@ -255,23 +278,23 @@ func TestBlockByNumber(t *testing.T) {
 		}}`,
 	)
 
-	block, err := client.BlockByNumber(t.Context(), 40_000_000)
+	block, err := client.GetBlockByNumber(t.Context(), 40_000_000)
 	if err != nil {
-		t.Fatalf("BlockByNumber: %v", err)
+		t.Fatalf("GetBlockByNumber: %v", err)
 	}
 	want := Block{Number: 40_000_000, Hash: Hash{31: 0xbb}, Timestamp: 0x68d3a000}
 	if block != want {
-		t.Errorf("BlockByNumber: got %+v, want %+v", block, want)
+		t.Errorf("GetBlockByNumber: got %+v, want %+v", block, want)
 	}
 }
 
-func TestBlockByNumberNotFound(t *testing.T) {
+func TestGetBlockByNumberNotFound(t *testing.T) {
 	client := serve(t,
 		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,
 		`{"result": null}`,
 	)
-	if _, err := client.BlockByNumber(t.Context(), 40_000_000); err == nil {
-		t.Fatal("BlockByNumber: expected an error")
+	if _, err := client.GetBlockByNumber(t.Context(), 40_000_000); err == nil {
+		t.Fatal("GetBlockByNumber: expected an error")
 	}
 }
 

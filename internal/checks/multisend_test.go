@@ -200,12 +200,16 @@ func TestMultiSendChecks(t *testing.T) {
 			c    check
 			want bool
 		}{{emptyMultiSendCheck, test.empty}, {invalidMultiSendCheck, test.reverted}} {
-			if got, err := check.c.fn(t.Context(), &safeID{}, test.c); got != check.want || err != nil {
+			if got, err := check.c.fn(t.Context(), nil, &safeID{}, test.c); got != check.want || err != nil {
 				t.Errorf("%s: check %q = %t, %v; want %t", test.name, check.c.classification(), got, err, check.want)
 			}
 		}
 	}
 
+	// The transactions are by a Safe of version 1.5.0 at the zero address.
+	supportedSafes.Clear()
+	node := &fakeNode{accounts: map[ethrpc.Address]account{{}: proxy(safeProxy150, singletonOf("1.5.0"))}}
+	dial := node.dialer(t, testSafeBlock)
 	multiSend150 := ethrpc.MustParseAddress("0x218543288004CD07832472D464648173c77D7eB7")
 	empty := safenet.SafeTransaction{
 		To:        multiSend150,
@@ -224,7 +228,7 @@ func TestMultiSendChecks(t *testing.T) {
 		{"reverting", reverting, invalidMultiSendCheck.classification()},
 		{"reverting with a refund", refunded, Classification{}},
 	} {
-		if got, err := Classify(t.Context(), request(test.tx)); got != test.want || err != nil {
+		if got, err := Classify(t.Context(), dial, request(test.tx)); got != test.want || err != nil {
 			t.Errorf("%s: Classify() = %+v, %v; want %+v", test.name, got, err, test.want)
 		}
 	}
