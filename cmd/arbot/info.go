@@ -1,0 +1,122 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"text/tabwriter"
+	"time"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/config"
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
+)
+
+// info shows a Safenet request, its proposal, votes, and arbitration.
+func info(ctx context.Context, cfg config.Config, args []string) error {
+	flags := flag.NewFlagSet("info", flag.ExitOnError)
+	block := flags.Uint64("block", 0, "Gnosis Chain block to read at (default: latest)")
+	asJSON := flags.Bool("json", false, "write the request as JSON")
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(), "Usage: %s info [flags] <request-id>\n\n", progname)
+		fmt.Fprintf(flags.Output(), "Shows a Safenet request, the transaction proposal it is for, the sentinels' votes, and its arbitration.\n\n")
+		flags.PrintDefaults()
+	}
+	flags.Parse(args)
+	if flags.NArg() != 1 {
+		flags.Usage()
+		os.Exit(2)
+	}
+	id, err := ethrpc.ParseHash(flags.Arg(0))
+	if err != nil {
+		die(2, "request ID %q: %v", flags.Arg(0), err)
+	}
+
+	sn, at, err := openSafenet(ctx, cfg, *block)
+	if err != nil {
+		return err
+	}
+	request, err := sn.Request(ctx, id, at)
+	if err != nil {
+		return err
+	}
+
+	if *asJSON {
+		return writeJSON(request)
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	writeRequest(w, request)
+	return w.Flush()
+}
+
+// writeRequest writes request as text to w, in sections of key-value rows.
+// Strings that come from the chain are quoted, so that they can't contain
+// terminal escape sequences.
+func writeRequest(w io.Writer, r *safenet.Request) {
+	fmt.Fprintf(w, "Request\n")
+	fmt.Fprintf(w, "  ID\t%s\n", r.ID)
+	fmt.Fprintf(w, "  Oracle\t%s\n", r.Oracle)
+	fmt.Fprintf(w, "  Charter\t%q\n", r.Charter)
+	fmt.Fprintf(w, "  State\t%s\n", r.State)
+	fmt.Fprintf(w, "  Sponsor\t%s\n", r.Terms.Sponsor)
+	fmt.Fprintf(w, "  Fee\t%s\n", r.Fee)
+	fmt.Fprintf(w, "  Bond\t%s\n", r.Terms.Bond)
+	fmt.Fprintf(w, "  Slash amount\t%s\n", r.Terms.SlashAmount)
+	fmt.Fprintf(w, "  DAO fee share\t%s%%\n", strconv.FormatFloat(float64(r.Terms.DAOFeeShare)/1000, 'f', -1, 64))
+	fmt.Fprintf(w, "  Commit deadline\tblock %d\n", r.Terms.CommitDeadline)
+	fmt.Fprintf(w, "  Reveal deadline\tblock %d\n", r.Terms.RevealDeadline)
+
+	p := r.Proposal
+	fmt.Fprintf(w, "\nProposal\n")
+	fmt.Fprintf(w, "  Consensus\t%s\n", p.Consensus)
+	fmt.Fprintf(w, "  Block\t%d (%s)\n", p.Block, p.Time.Format(time.RFC3339))
+	fmt.Fprintf(w, "  Transaction\t%s\n", p.TxHash)
+	fmt.Fprintf(w, "  Epoch\t%d\n", p.Epoch)
+	fmt.Fprintf(w, "  Oracle data\t%s\n", p.OracleData)
+	fmt.Fprintf(w, "  Safe tx hash\t%s\n", p.SafeTxHash)
+
+	tx := p.Transaction
+	fmt.Fprintf(w, "\nSafe transaction\n")
+	fmt.Fprintf(w, "  Chain ID\t%s\n", tx.ChainID)
+	fmt.Fprintf(w, "  Safe\t%s\n", tx.Safe)
+	fmt.Fprintf(w, "  To\t%s\n", tx.To)
+	fmt.Fprintf(w, "  Value\t%s\n", tx.Value)
+	fmt.Fprintf(w, "  Data\t%s\n", tx.Data)
+	fmt.Fprintf(w, "  Operation\t%s\n", tx.Operation)
+	fmt.Fprintf(w, "  Safe tx gas\t%s\n", tx.SafeTxGas)
+	fmt.Fprintf(w, "  Base gas\t%s\n", tx.BaseGas)
+	fmt.Fprintf(w, "  Gas price\t%s\n", tx.GasPrice)
+	fmt.Fprintf(w, "  Gas token\t%s\n", tx.GasToken)
+	fmt.Fprintf(w, "  Refund receiver\t%s\n", tx.RefundReceiver)
+	fmt.Fprintf(w, "  Nonce\t%s\n", tx.Nonce)
+
+	fmt.Fprintf(w, "\nVotes\n")
+	if len(r.Votes) == 0 {
+		fmt.Fprintf(w, "  none\n")
+	}
+	for _, v := range r.Votes {
+		fmt.Fprintf(w, "  %s\t%s\tbond %s\treason %q\n", v.Sentinel, v.Vote, v.Bond, v.Reason)
+	}
+
+	a := r.Arbitration
+	if a == nil {
+		return
+	}
+	fmt.Fprintf(w, "\nArbitration\n")
+	fmt.Fprintf(w, "  Frozen\tblock %d\n", a.FrozenBlock)
+	fmt.Fprintf(w, "  Deadline\tblock %d\n", a.Deadline)
+	fmt.Fprintf(w, "  Outcome\t%s\n", a.Outcome)
+	if a.Slashed != nil {
+		fmt.Fprintf(w, "  Slashed\t%s\n", a.Slashed)
+	}
+	switch a.Outcome {
+	case safenet.OutcomeSecure, safenet.OutcomeInsecure, safenet.OutcomeOutOfScope:
+		fmt.Fprintf(w, "  Context\t%q\n", a.Context)
+	}
+	if a.Record != nil {
+		fmt.Fprintf(w, "  Record\tblock %d, transaction %s\n", a.Record.Block, a.Record.TxHash)
+	}
+}

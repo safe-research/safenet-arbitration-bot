@@ -22,6 +22,8 @@ var commands = map[string]struct {
 	description string
 }{
 	"charter": {charter, "fetch the Safenet Arbitration Charter"},
+	"info":    {info, "show a Safenet request, its proposal, votes, and arbitration"},
+	"pending": {pending, "list the disputed Safenet requests awaiting arbitration"},
 }
 
 func main() {

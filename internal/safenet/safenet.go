@@ -19,10 +19,12 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 )
 
-// DefaultOracle is the address of the SentinelOracle deployment on Gnosis Chain
-// that commands use by default. It is zero until the oracle-backed Safenet is
-// deployed.
-var DefaultOracle ethrpc.Address
+// The addresses of the SentinelOracle and Consensus deployments on Gnosis Chain
+// that commands use by default.
+var (
+	DefaultOracle    = mustParseAddress("0x544F12bAd6FF72564abBc7eA6494A2a4BdD0DDD0")
+	DefaultConsensus = mustParseAddress("0x98810887769db19A0Df9bf2f44E4998856fcb390")
+)
 
 // ErrRequestNotFound is returned for a request ID that the oracle has no
 // request for.
@@ -60,15 +62,16 @@ var arbitrationEvents = []ethrpc.Hash{
 
 // Safenet reads the requests of a SentinelOracle.
 type Safenet struct {
-	eth    *ethrpc.Client
-	oracle ethrpc.Address
+	eth       *ethrpc.Client
+	oracle    ethrpc.Address
+	consensus ethrpc.Address
 }
 
-// New returns a Safenet that reads the SentinelOracle at oracle, using eth, a
-// client for the chain the oracle is deployed on. The oracle's Consensus
-// contract is its PROPOSER.
-func New(eth *ethrpc.Client, oracle ethrpc.Address) *Safenet {
-	return &Safenet{eth: eth, oracle: oracle}
+// New returns a Safenet that reads the SentinelOracle at oracle and the
+// Consensus contract at consensus, using eth, a client for the chain they are
+// deployed on. The oracle's PROPOSER must be consensus.
+func New(eth *ethrpc.Client, oracle, consensus ethrpc.Address) *Safenet {
+	return &Safenet{eth: eth, oracle: oracle, consensus: consensus}
 }
 
 // Pending returns the disputes awaiting arbitration as of block, ordered by
@@ -81,7 +84,7 @@ func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Disp
 		return nil, err
 	}
 
-	var disputes []Dispute
+	disputes := []Dispute{}
 	settled := make(map[ethrpc.Hash]bool)
 	logs := s.eth.ScanLogs(ctx, ethrpc.LogFilter{
 		FromBlock: block - min(ethrpc.BlockNumber(timeout), block),
@@ -133,9 +136,12 @@ func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.Bloc
 	if err != nil {
 		return nil, err
 	}
-	consensus, err := s.callAddress(ctx, block, proposerSelector)
+	proposer, err := s.callAddress(ctx, block, proposerSelector)
 	if err != nil {
 		return nil, err
+	}
+	if proposer != s.consensus {
+		return nil, fmt.Errorf("SentinelOracle %s has PROPOSER %s, not Consensus %s", s.oracle, proposer, s.consensus)
 	}
 	if request.Charter, err = s.callString(ctx, block, charterENSSelector); err != nil {
 		return nil, err
@@ -146,7 +152,7 @@ func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.Bloc
 	if commitWindow > request.Terms.CommitDeadline {
 		return nil, fmt.Errorf("request %s: commit deadline %d is before COMMIT_WINDOW %d", id, request.Terms.CommitDeadline, commitWindow)
 	}
-	if request.Proposal, err = s.proposal(ctx, id, consensus, request.Terms.CommitDeadline-commitWindow); err != nil {
+	if request.Proposal, err = s.proposal(ctx, id, request.Terms.CommitDeadline-commitWindow); err != nil {
 		return nil, err
 	}
 
@@ -241,11 +247,11 @@ func (s *Safenet) getRequest(ctx context.Context, id ethrpc.Hash, block ethrpc.B
 
 // proposal finds the transaction proposal for request id, which was made in
 // block.
-func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, consensus ethrpc.Address, block uint64) (Proposal, error) {
+func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (Proposal, error) {
 	logs, err := s.eth.GetLogs(ctx, ethrpc.LogFilter{
 		FromBlock: ethrpc.BlockNumber(block),
 		ToBlock:   ethrpc.BlockNumber(block),
-		Addresses: []ethrpc.Address{consensus},
+		Addresses: []ethrpc.Address{s.consensus},
 		Topics:    [][]ethrpc.Hash{{transactionProposedEvent}, nil, nil, {solabi.Address(s.oracle)}},
 	})
 	if err != nil {
@@ -260,7 +266,7 @@ func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, consensus ethrpc
 		if err != nil {
 			return Proposal{}, fmt.Errorf("decoding proposal in transaction %s: %w", log.TransactionHash, err)
 		}
-		if requestID(s.eth.ChainID(), consensus, proposal.Epoch, s.oracle, proposal.OracleData, proposal.SafeTxHash) != id {
+		if requestID(s.eth.ChainID(), s.consensus, proposal.Epoch, s.oracle, proposal.OracleData, proposal.SafeTxHash) != id {
 			continue
 		}
 		if hash := proposal.Transaction.Hash(); hash != proposal.SafeTxHash {
@@ -270,7 +276,7 @@ func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, consensus ethrpc
 		if err != nil {
 			return Proposal{}, fmt.Errorf("getting proposal block: %w", err)
 		}
-		proposal.Consensus = consensus
+		proposal.Consensus = s.consensus
 		proposal.Time = time.Unix(int64(header.Timestamp), 0).UTC()
 		return proposal, nil
 	}
@@ -488,4 +494,12 @@ func isRevert(err error, selector [4]byte) bool {
 		return false
 	}
 	return bytes.Equal(data, selector[:])
+}
+
+func mustParseAddress(s string) ethrpc.Address {
+	address, err := ethrpc.ParseAddress(s)
+	if err != nil {
+		panic(err)
+	}
+	return address
 }

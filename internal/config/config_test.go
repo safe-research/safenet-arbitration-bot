@@ -128,7 +128,8 @@ func TestLoadSettings(t *testing.T) {
 	write(t, path, `{
 		"rpcs": {"1": "https://mainnet.example", "100": "https://gnosis.example"},
 		"ipfs": "https://ipfs.example",
-		"oracle": "0x00000000000000000000000000000000000000aa"
+		"consensus": "0x00000000000000000000000000000000000000aa",
+		"oracle": "0x00000000000000000000000000000000000000bb"
 	}`)
 
 	config, err := Load(path)
@@ -136,11 +137,12 @@ func TestLoadSettings(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	want := Config{
-		RPCs:   map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
-		IPFS:   "https://ipfs.example",
-		Oracle: ethrpc.Address{19: 0xaa},
+		RPCs:      map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
+		IPFS:      "https://ipfs.example",
+		Consensus: ethrpc.Address{19: 0xaa},
+		Oracle:    ethrpc.Address{19: 0xbb},
 	}
-	if !maps.Equal(config.RPCs, want.RPCs) || config.IPFS != want.IPFS || config.Oracle != want.Oracle {
+	if !maps.Equal(config.RPCs, want.RPCs) || config.IPFS != want.IPFS || config.Oracle != want.Oracle || config.Consensus != want.Consensus {
 		t.Errorf("Load: got %+v, want %+v", config, want)
 	}
 }
