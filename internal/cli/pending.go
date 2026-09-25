@@ -9,7 +9,6 @@ import (
 // pending lists the disputed Safenet requests awaiting arbitration.
 func pending(ctx context.Context, e *env, args []string) error {
 	flags := e.flagSet("pending")
-	block := flags.Uint64("block", 0, "Gnosis Chain block to read at (default: latest)")
 	asJSON := flags.Bool("json", false, "write the disputes as JSON")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: %s pending [flags]\n\n", e.progname)
@@ -20,11 +19,7 @@ func pending(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 
-	sn, at, err := openSafenet(ctx, e.cfg, *block)
-	if err != nil {
-		return err
-	}
-	disputes, err := sn.Pending(ctx, at)
+	disputes, err := openSafenet(e.cfg).Pending(ctx)
 	if err != nil {
 		return err
 	}

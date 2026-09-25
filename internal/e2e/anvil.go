@@ -34,11 +34,10 @@ var blockTimes = map[uint64]uint64{ethrpc.Mainnet: 12, ethrpc.Gnosis: 5}
 // until the test ends, passing args to anvil. It skips the test if anvil isn't
 // installed, or in short mode.
 //
-// The node keeps the state of the latest stateHistory blocks before the latest
-// one, for calls at those blocks, and calls at older blocks fail. Keeping any
-// history makes mining an order of magnitude slower, as anvil snapshots the
-// state of every block, so tests that mine many blocks should keep none.
-func StartAnvil(tb testing.TB, chainID uint64, stateHistory int, args ...string) *Anvil {
+// The node only keeps the state of the latest block, so calls at older blocks
+// fail. Keeping history would make mining an order of magnitude slower, as
+// anvil would snapshot the state of every block.
+func StartAnvil(tb testing.TB, chainID uint64, args ...string) *Anvil {
 	tb.Helper()
 	if testing.Short() {
 		tb.Skip("skipping end-to-end test in short mode")
@@ -52,11 +51,7 @@ func StartAnvil(tb testing.TB, chainID uint64, stateHistory int, args ...string)
 	if !ok {
 		tb.Fatalf("no block time for chain %d", chainID)
 	}
-	anvilArgs := []string{"--chain-id", fmt.Sprint(chainID), "--port", "0", "--auto-impersonate", "--prune-history"}
-	if stateHistory > 0 {
-		anvilArgs = append(anvilArgs, fmt.Sprint(stateHistory+1))
-	}
-	args = append(anvilArgs, args...)
+	args = append([]string{"--chain-id", fmt.Sprint(chainID), "--port", "0", "--auto-impersonate", "--prune-history"}, args...)
 	// The test's context is canceled before its cleanup functions run, which kills
 	// anvil.
 	cmd := exec.CommandContext(tb.Context(), path, args...)

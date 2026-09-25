@@ -69,38 +69,46 @@ func New(dial ethrpc.Dialer, oracle, consensus ethrpc.Address) *Safenet {
 	return &Safenet{dial: dial, oracle: oracle, consensus: consensus}
 }
 
-// session is a Safenet connected to Gnosis Chain, for one query.
+// session is a Safenet connected to Gnosis Chain, for one query, which reads
+// the chain as of block.
 type session struct {
 	*Safenet
-	eth *ethrpc.Client
+	eth   *ethrpc.Client
+	block ethrpc.BlockNumber
 }
 
-// connect returns a session connected to Gnosis Chain.
+// connect returns a session connected to Gnosis Chain, as of its latest block.
 func (s *Safenet) connect(ctx context.Context) (*session, error) {
 	eth, err := s.dial(ctx, ethrpc.Gnosis)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to Gnosis Chain: %w", err)
 	}
-	return &session{Safenet: s, eth: eth}, nil
+	block, err := eth.BlockNumber(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting the latest Gnosis Chain block: %w", err)
+	}
+	return &session{Safenet: s, eth: eth, block: block}, nil
 }
 
-// Pending returns the disputes awaiting arbitration as of block, ordered by
-// deadline. These are the frozen requests that the arbitrator can still rule on
-// before the deadline: as a dispute's deadline is the block it was frozen in
-// plus the oracle's ARBITRATION_TIMEOUT, only that many blocks need scanning.
+// Pending returns the disputes awaiting arbitration as of the latest block,
+// ordered by deadline. These are the frozen requests that the arbitrator can
+// still rule on before the deadline: as a dispute's deadline is the block it
+// was frozen in plus the oracle's ARBITRATION_TIMEOUT, only that many blocks
+// need scanning.
 //
 // Overdue disputes are left out, although the arbitrator can rule on them until
 // someone calls timeoutArbitration, as sentinels generally call it promptly to
 // reclaim their bonds.
-func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Dispute, error) {
+func (s *Safenet) Pending(ctx context.Context) ([]Dispute, error) {
 	q, err := s.connect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return q.pending(ctx, block)
+	return q.pending(ctx)
 }
 
-func (s *session) pending(ctx context.Context, block ethrpc.BlockNumber) ([]Dispute, error) {
+func (s *session) pending(ctx context.Context) ([]Dispute, error) {
+	block := s.block
 	timeout, err := s.callUint64(ctx, block, arbitrationTimeoutSelector)
 	if err != nil {
 		return nil, err
@@ -142,22 +150,23 @@ func (s *session) pending(ctx context.Context, block ethrpc.BlockNumber) ([]Disp
 	return disputes, nil
 }
 
-// Request returns the request with the given ID as of block: the oracle's
-// record of it, the transaction proposal it is for, the sentinels' votes, and
-// its arbitration. It returns an error wrapping ErrRequestNotFound if the
-// oracle has no request with the ID.
+// Request returns the request with the given ID as of the latest block: the
+// oracle's record of it, the transaction proposal it is for, the sentinels'
+// votes, and its arbitration. It returns an error wrapping ErrRequestNotFound
+// if the oracle has no request with the ID.
 //
 // The proposal is taken from the Consensus logs, and only accepted if hashing
 // it gives both the logged Safe transaction hash and the request ID.
-func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, error) {
+func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash) (*Request, error) {
 	q, err := s.connect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return q.request(ctx, id, block)
+	return q.request(ctx, id)
 }
 
-func (s *session) request(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, error) {
+func (s *session) request(ctx context.Context, id ethrpc.Hash) (*Request, error) {
+	block := s.block
 	request, progress, err := s.getRequest(ctx, id, block)
 	if err != nil {
 		return nil, err

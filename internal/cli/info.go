@@ -15,7 +15,6 @@ import (
 // info shows a Safenet request, its proposal, votes, and arbitration.
 func info(ctx context.Context, e *env, args []string) error {
 	flags := e.flagSet("info")
-	block := flags.Uint64("block", 0, "Gnosis Chain block to read at (default: latest)")
 	asJSON := flags.Bool("json", false, "write the request as JSON")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: %s info [flags] <request-id>\n\n", e.progname)
@@ -30,11 +29,7 @@ func info(ctx context.Context, e *env, args []string) error {
 		return usageError(fmt.Sprintf("request ID %q: %v", flags.Arg(0), err))
 	}
 
-	sn, at, err := openSafenet(ctx, e.cfg, *block)
-	if err != nil {
-		return err
-	}
-	request, err := sn.Request(ctx, id, at)
+	request, err := openSafenet(e.cfg).Request(ctx, id)
 	if err != nil {
 		return err
 	}

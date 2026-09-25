@@ -27,11 +27,7 @@ func classify(ctx context.Context, e *env, args []string) error {
 		return usageError(fmt.Sprintf("request ID %q: %v", flags.Arg(0), err))
 	}
 
-	sn, at, err := openSafenet(ctx, e.cfg, 0)
-	if err != nil {
-		return err
-	}
-	request, err := sn.Request(ctx, id, at)
+	request, err := openSafenet(e.cfg).Request(ctx, id)
 	if err != nil {
 		return err
 	}

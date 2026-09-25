@@ -25,8 +25,9 @@ var (
 	record = flag.Bool("record", false, "record the block headers that testdata/headers.json lacks from each chain's default RPCs")
 )
 
-// fixture is a snapshot of the Gnosis Chain deployment as of a block: the call
-// results, logs, and block headers that Pending and Request read.
+// fixture is a snapshot of the Gnosis Chain deployment as of a block, which it
+// serves as the latest block: the call results, logs, and block headers that
+// Pending and Request read.
 //
 // testdata/gnosis.json was recorded through a JSON-RPC proxy in front of
 // https://rpc.gnosischain.com, while running `arbot pending` and `arbot info`
@@ -273,6 +274,8 @@ func (f *fixture) handle(method string, params []json.RawMessage) (any, *ethrpc.
 	switch method {
 	case "eth_chainId":
 		return "0x64", nil, nil
+	case "eth_blockNumber":
+		return f.Block, nil, nil
 	case "eth_call":
 		var call ethrpc.CallRequest
 		var block ethrpc.BlockNumber
@@ -393,7 +396,7 @@ var (
 
 func TestPending(t *testing.T) {
 	f := loadFixture(t)
-	disputes, err := f.open(t).Pending(t.Context(), f.Block)
+	disputes, err := f.open(t).Pending(t.Context())
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -425,7 +428,7 @@ func TestPending(t *testing.T) {
 func TestPendingNone(t *testing.T) {
 	f := loadFixture(t)
 	f.Logs = nil
-	disputes, err := f.open(t).Pending(t.Context(), f.Block)
+	disputes, err := f.open(t).Pending(t.Context())
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -459,7 +462,7 @@ func TestRequest(t *testing.T) {
 	sn := f.open(t)
 	var requests []*Request
 	for _, test := range tests {
-		request, err := sn.Request(t.Context(), test.id, f.Block)
+		request, err := sn.Request(t.Context(), test.id)
 		if err != nil {
 			t.Errorf("Request(%s): %v", test.name, err)
 			continue
@@ -522,7 +525,7 @@ func TestRequestBlocks(t *testing.T) {
 	f := loadFixture(t)
 	sn := f.open(t)
 	for _, test := range tests {
-		request, err := sn.Request(t.Context(), test.id, f.Block)
+		request, err := sn.Request(t.Context(), test.id)
 		if err != nil {
 			t.Errorf("Request(%s): %v", test.name, err)
 			continue
@@ -546,13 +549,13 @@ func TestRequestDialError(t *testing.T) {
 		return nil, errors.New("no RPC")
 	}
 	sn := New(dial, DefaultOracle, DefaultConsensus)
-	wantError(t, sn, frozenID, f.Block, "connecting to chain 1: no RPC")
-	wantError(t, sn, frozenID, f.Block, "connecting to chain 42161: no RPC")
+	wantError(t, sn, frozenID, "connecting to chain 1: no RPC")
+	wantError(t, sn, frozenID, "connecting to chain 42161: no RPC")
 
 	// Nothing can be reached.
 	sn = New(func(context.Context, uint64) (*ethrpc.Client, error) { return nil, errors.New("no RPC") }, DefaultOracle, DefaultConsensus)
-	wantError(t, sn, frozenID, f.Block, "connecting to Gnosis Chain: no RPC")
-	if _, err := sn.Pending(t.Context(), f.Block); err == nil || !strings.Contains(err.Error(), "connecting to Gnosis Chain: no RPC") {
+	wantError(t, sn, frozenID, "connecting to Gnosis Chain: no RPC")
+	if _, err := sn.Pending(t.Context()); err == nil || !strings.Contains(err.Error(), "connecting to Gnosis Chain: no RPC") {
 		t.Errorf("Pending: got error %v, want one saying that Gnosis Chain can't be reached", err)
 	}
 }
@@ -560,7 +563,7 @@ func TestRequestDialError(t *testing.T) {
 func TestRequestNotFound(t *testing.T) {
 	f := loadFixture(t)
 	id := ethrpc.Hash{31: 1}
-	if _, err := f.open(t).Request(t.Context(), id, f.Block); !errors.Is(err, ErrRequestNotFound) {
+	if _, err := f.open(t).Request(t.Context(), id); !errors.Is(err, ErrRequestNotFound) {
 		t.Errorf("Request: got error %v, want %v", err, ErrRequestNotFound)
 	}
 }
@@ -568,7 +571,7 @@ func TestRequestNotFound(t *testing.T) {
 func TestRequestWrongConsensus(t *testing.T) {
 	f := loadFixture(t)
 	sn := New(f.dial(t), DefaultOracle, ethrpc.Address{19: 1})
-	wantError(t, sn, frozenID, f.Block, "has PROPOSER")
+	wantError(t, sn, frozenID, "has PROPOSER")
 }
 
 func TestRequestProposalMismatch(t *testing.T) {
@@ -577,7 +580,7 @@ func TestRequestProposalMismatch(t *testing.T) {
 		// Changing the epoch changes the request ID that the proposal hashes to.
 		log := f.log(t, transactionProposedEvent, frozenSafeTxHash)
 		log.Data[31] ^= 1
-		wantError(t, f.open(t), frozenID, f.Block, "no proposal in block 48385778 hashes to the request ID")
+		wantError(t, f.open(t), frozenID, "no proposal in block 48385778 hashes to the request ID")
 	})
 	t.Run("Safe transaction hash", func(t *testing.T) {
 		f := loadFixture(t)
@@ -586,40 +589,40 @@ func TestRequestProposalMismatch(t *testing.T) {
 		log := f.log(t, transactionProposedEvent, frozenSafeTxHash)
 		tx := binary.BigEndian.Uint64(log.Data[2*32+24 : 3*32])
 		log.Data[tx+12*32-1] ^= 1
-		wantError(t, f.open(t), frozenID, f.Block, "Safe transaction hashes to")
+		wantError(t, f.open(t), frozenID, "Safe transaction hashes to")
 	})
 }
 
 func TestRequestVoteMismatch(t *testing.T) {
 	f := loadFixture(t)
 	f.removeLogs(t, revealedEvent, frozenID)
-	wantError(t, f.open(t), frozenID, f.Block, "logs have 2 commits, 0 reveals")
+	wantError(t, f.open(t), frozenID, "logs have 2 commits, 0 reveals")
 }
 
 func TestRequestArbitrationMismatch(t *testing.T) {
 	t.Run("not frozen", func(t *testing.T) {
 		f := loadFixture(t)
 		f.removeLogs(t, disputeTriggeredEvent, frozenID)
-		wantError(t, f.open(t), frozenID, f.Block, "no DisputeTriggered log")
+		wantError(t, f.open(t), frozenID, "no DisputeTriggered log")
 	})
 	t.Run("not settled", func(t *testing.T) {
 		f := loadFixture(t)
 		f.removeLogs(t, disputeResolvedEvent, insecureID)
-		wantError(t, f.open(t), insecureID, f.Block, "is RESOLVED_DENIED, but its arbitration logs have outcome pending")
+		wantError(t, f.open(t), insecureID, "is RESOLVED_DENIED, but its arbitration logs have outcome pending")
 	})
 	t.Run("wrong outcome", func(t *testing.T) {
 		f := loadFixture(t)
 		// Change the ruling of the RESOLVED_DENIED request from insecure to secure.
 		log := f.log(t, disputeResolvedEvent, insecureID)
 		log.Data[31] = byte(StateResolvedApproved)
-		wantError(t, f.open(t), insecureID, f.Block, "is RESOLVED_DENIED, but its arbitration logs have outcome secure")
+		wantError(t, f.open(t), insecureID, "is RESOLVED_DENIED, but its arbitration logs have outcome secure")
 	})
 }
 
 // wantError checks that Request fails for id with an error containing want.
-func wantError(t *testing.T, sn *Safenet, id ethrpc.Hash, block ethrpc.BlockNumber, want string) {
+func wantError(t *testing.T, sn *Safenet, id ethrpc.Hash, want string) {
 	t.Helper()
-	_, err := sn.Request(t.Context(), id, block)
+	_, err := sn.Request(t.Context(), id)
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("Request: got error %v, want one containing %q", err, want)
 	}

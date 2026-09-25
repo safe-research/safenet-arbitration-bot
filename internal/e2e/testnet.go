@@ -39,14 +39,13 @@ type Testnet struct {
 }
 
 // NewTestnet starts a Gnosis Chain anvil node with the artifacts installed, and
-// funds the sponsor, the sentinels, and the arbitrator. See StartAnvil for
-// stateHistory. It also starts an Ethereum Mainnet node, whose genesis block is
-// an hour earlier. It skips the test if anvil isn't installed, or in short
-// mode.
-func NewTestnet(tb testing.TB, stateHistory int) *Testnet {
+// funds the sponsor, the sentinels, and the arbitrator. It also starts an
+// Ethereum Mainnet node, whose genesis block is an hour earlier. It skips the
+// test if anvil isn't installed, or in short mode.
+func NewTestnet(tb testing.TB) *Testnet {
 	tb.Helper()
-	mainnet := StartAnvil(tb, ethrpc.Mainnet, 0, "--timestamp", fmt.Sprint(time.Now().Add(-time.Hour).Unix()))
-	node := StartAnvil(tb, ethrpc.Gnosis, stateHistory)
+	mainnet := StartAnvil(tb, ethrpc.Mainnet, "--timestamp", fmt.Sprint(time.Now().Add(-time.Hour).Unix()))
+	node := StartAnvil(tb, ethrpc.Gnosis)
 	a := LoadArtifacts(tb)
 	node.Install(a)
 	n := &Testnet{Anvil: node, Mainnet: mainnet, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}
