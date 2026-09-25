@@ -20,20 +20,21 @@ var safeProxyCodeHashes = []ethrpc.Hash{
 	ethrpc.MustParseHash("0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f"),
 }
 
-// singletons are the Safe and SafeL2 singletons of the Safe versions that § 2.1
-// lists, by version, as listed in the safe-deployments repository at
+// singletons are the Safe and SafeL2 singletons of the Safe versions that the
+// Charter lists in § 2.1, by version, with "+L2" for SafeL2. They are listed in
+// the safe-deployments repository at
 // https://github.com/safe-global/safe-deployments, which lists each of them on
 // every network that the Charter covers. They are deterministic deployments, so
 // an address has either the singleton's code or none at all.
 var singletons = map[ethrpc.Address]string{
 	ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552"): "1.3.0",
 	ethrpc.MustParseAddress("0x69f4D1788e39c87893C980c06EdF4b7f686e2938"): "1.3.0",
-	ethrpc.MustParseAddress("0x3E5c63644E683549055b9Be8653de26E0B4CD36E"): "1.3.0",
-	ethrpc.MustParseAddress("0xfb1bffC9d739B8D520DaF37dF666da4C687191EA"): "1.3.0",
+	ethrpc.MustParseAddress("0x3E5c63644E683549055b9Be8653de26E0B4CD36E"): "1.3.0+L2",
+	ethrpc.MustParseAddress("0xfb1bffC9d739B8D520DaF37dF666da4C687191EA"): "1.3.0+L2",
 	ethrpc.MustParseAddress("0x41675C099F32341bf84BFc5382aF534df5C7461a"): "1.4.1",
-	ethrpc.MustParseAddress("0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"): "1.4.1",
+	ethrpc.MustParseAddress("0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"): "1.4.1+L2",
 	ethrpc.MustParseAddress("0xFf51A5898e281Db6DfC7855790607438dF2ca44b"): "1.5.0",
-	ethrpc.MustParseAddress("0xEdd160fEBBD92E350D4D398fb636302fccd67C7e"): "1.5.0",
+	ethrpc.MustParseAddress("0xEdd160fEBBD92E350D4D398fb636302fccd67C7e"): "1.5.0+L2",
 }
 
 // unsupportedSafe finds a call by an account that isn't a Safe of a version
