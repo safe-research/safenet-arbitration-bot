@@ -27,5 +27,4 @@ jobs:
 
       - uses: safe-research/actions/install-just@v1
 
-      - run: just check
-      - run: just test
+      - run: just ci

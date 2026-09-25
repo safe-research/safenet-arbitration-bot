@@ -63,7 +63,7 @@ Ask the user for any input that the request doesn't settle. The models and effor
 
 4. **List the sub-agent** in the Sub-agents section of `AGENTS.md`, with one line on what it does, and describe where orchestrators should use it.
 
-5. **Run `just precommit`**, which formats the Markdown and runs `just check-agents` to confirm that both stubs exist and their descriptions match.
+5. **Run `just precommit`**, which formats the Markdown and runs `just check-agent-stubs` to confirm that both stubs exist and their descriptions match.
 
 ## Changing a Sub-agent
 

@@ -62,5 +62,8 @@ check-testdata:
             || { echo "$file is not formatted with jq"; exit 1; }
     done
 
-# Run all pre-commit checks.
-precommit: fix check test check-agent-stubs check-testdata
+# Run all of the checks that CI runs.
+ci: check test check-agent-stubs check-testdata
+
+# Format the sources, then run all of the checks that CI runs.
+precommit: fix ci

@@ -71,6 +71,10 @@ func New(eth *ethrpc.Client, oracle, consensus ethrpc.Address) *Safenet {
 // deadline. These are the frozen requests that the arbitrator can still rule on
 // before the deadline: as a dispute's deadline is the block it was frozen in
 // plus the oracle's ARBITRATION_TIMEOUT, only that many blocks need scanning.
+//
+// Overdue disputes are left out, although the arbitrator can rule on them until
+// someone calls timeoutArbitration, as sentinels generally call it promptly to
+// reclaim their bonds.
 func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Dispute, error) {
 	timeout, err := s.callUint64(ctx, block, arbitrationTimeoutSelector)
 	if err != nil {
