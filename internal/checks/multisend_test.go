@@ -13,9 +13,7 @@ import (
 
 // equalCalls reports whether a and b are the same calls.
 func equalCalls(a, b []call) bool {
-	return slices.EqualFunc(a, b, func(a, b call) bool {
-		return a.to == b.to && a.value.Cmp(b.value) == 0 && bytes.Equal(a.data, b.data) && a.operation == b.operation
-	})
+	return slices.EqualFunc(a, b, call.equal)
 }
 
 // pack packs calls as MultiSend's transactions.
@@ -169,5 +167,65 @@ func TestExpandTransactionCalls(t *testing.T) {
 				t.Errorf("expandTransactionCalls() = %+v, want %+v", calls, want)
 			}
 		})
+	}
+}
+
+func TestMultiSendChecks(t *testing.T) {
+	multiSend := ethrpc.MustParseAddress("0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526")
+	other := ethrpc.Address{19: 0x70}
+	withValue := func(c call) call {
+		c.value = big.NewInt(1)
+		return c
+	}
+	tests := []struct {
+		name            string
+		c               call
+		empty, reverted bool
+	}{
+		{"empty", emptyMultiSend(multiSend), true, false},
+		{"reverting", revertingMultiSend(multiSend), false, true},
+		{"empty with value", withValue(emptyMultiSend(multiSend)), false, false},
+		{"reverting with value", withValue(revertingMultiSend(multiSend)), false, false},
+		{"empty to another contract", emptyMultiSend(other), false, false},
+		{"reverting to another contract", revertingMultiSend(other), false, false},
+		{"MultiSend with transactions", call{
+			to:        multiSend,
+			value:     new(big.Int),
+			data:      solabi.Call(multiSendSelector, make([]byte, 85)),
+			operation: safenet.OperationDelegateCall,
+		}, false, false},
+	}
+	for _, test := range tests {
+		for _, check := range []struct {
+			c    check
+			want bool
+		}{{emptyMultiSendCheck, test.empty}, {invalidMultiSendCheck, test.reverted}} {
+			if got, err := check.c.fn(t.Context(), &safeID{}, test.c); got != check.want || err != nil {
+				t.Errorf("%s: check %q = %t, %v; want %t", test.name, check.c.classification(), got, err, check.want)
+			}
+		}
+	}
+
+	multiSend150 := ethrpc.MustParseAddress("0x218543288004CD07832472D464648173c77D7eB7")
+	empty := safenet.SafeTransaction{
+		To:        multiSend150,
+		Data:      solabi.Call(multiSendSelector, []byte{}),
+		Operation: safenet.OperationDelegateCall,
+	}
+	reverting := safenet.SafeTransaction{To: multiSend150, Data: solabi.Call(multiSendSelector, []byte{})}
+	refunded := reverting
+	refunded.GasPrice = big.NewInt(1)
+	for _, test := range []struct {
+		name string
+		tx   safenet.SafeTransaction
+		want Classification
+	}{
+		{"empty", empty, emptyMultiSendCheck.classification()},
+		{"reverting", reverting, invalidMultiSendCheck.classification()},
+		{"reverting with a refund", refunded, Classification{}},
+	} {
+		if got, err := Classify(t.Context(), request(test.tx)); got != test.want || err != nil {
+			t.Errorf("%s: Classify() = %+v, %v; want %+v", test.name, got, err, test.want)
+		}
 	}
 }

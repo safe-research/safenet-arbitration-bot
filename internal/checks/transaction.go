@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 
@@ -30,6 +31,11 @@ type call struct {
 	value     *big.Int
 	data      ethrpc.Bytes
 	operation safenet.Operation
+}
+
+// equal reports whether c and o are the same call.
+func (c call) equal(o call) bool {
+	return c.to == o.to && c.value.Cmp(o.value) == 0 && bytes.Equal(c.data, o.data) && c.operation == o.operation
 }
 
 // components returns the components of a Safe transaction. It returns an error

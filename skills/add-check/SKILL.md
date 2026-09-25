@@ -44,7 +44,7 @@ A check receives one call at a time, with the `safeID` of the Safe that makes it
 
    If one rule decides several classes, such as different settings changes, write one check per class, each with its own description.
 
-2. **Register the check** in the `checks` variable. `arbot classify` groups the checks by verdict, so their position only orders them among the checks with the same verdict. A request that matches two checks with different verdicts is a bug in one of them, not a matter of order. `TestChecks` checks that every check has a verdict, a description, a function, and a rule only if it is `insecure`.
+2. **Register the check** in the `checks` variable, which lists the checks in the order that they run, grouped by verdict: the `out-of-scope` ones, then the `insecure` ones, then the `secure` ones. Add it at the end of its verdict's group, unless it must run before another check with the same verdict. A request that matches two checks with different verdicts is a bug in one of them, not a matter of order. `TestChecks` checks that the checks are grouped by verdict, and that every check has a verdict, a description, a function, and a rule only if it is `insecure`.
 
 3. **Test the check** in `internal/checks/<name>_test.go`, with a table of calls, or of requests built with the `request` helper in `checks_test.go` to go through `components`. Cover:
    - each way the request can be in the class;

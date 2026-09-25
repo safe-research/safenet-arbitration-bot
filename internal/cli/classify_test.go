@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/checks"
 )
 
 func TestClassify(t *testing.T) {
@@ -24,6 +27,16 @@ func TestClassify(t *testing.T) {
 		"proposal": {"transaction": {"chainId": 100, "value": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": 0, "nonce": 0}}
 	}`)
 
+	// The list is that of the checks package, one per line or as JSON.
+	var listText string
+	for _, c := range checks.List() {
+		listText += c.String() + "\n"
+	}
+	listJSON, err := json.MarshalIndent(checks.List(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		args   []string
 		code   int
@@ -39,13 +52,8 @@ func TestClassify(t *testing.T) {
 		{[]string{"-request-file", filepath.Join(dir, "missing.json")}, 1, "", "no such file"},
 		{[]string{"-request-file", request, "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 		{[]string{}, 2, "", "Usage:"},
-		{[]string{"-list"}, 0, "out-of-scope  Safe on a network that the Charter doesn't cover\n", ""},
-		{
-			[]string{"-json", "-list"},
-			0,
-			"[\n  {\n    \"verdict\": \"out-of-scope\",\n    \"description\": \"Safe on a network that the Charter doesn't cover\"\n  }\n]\n",
-			"",
-		},
+		{[]string{"-list"}, 0, listText, ""},
+		{[]string{"-json", "-list"}, 0, string(listJSON) + "\n", ""},
 		{[]string{"-list", "-request-file", request}, 2, "", "mutually exclusive"},
 		{[]string{"-list", "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb"}, 2, "", "Usage:"},
 	}

@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"context"
 	"math/big"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -58,6 +59,31 @@ func emptyMultiSend(to ethrpc.Address) call {
 		data:      solabi.Call(multiSendSelector, []byte{}),
 		operation: safenet.OperationDelegateCall,
 	}
+}
+
+// emptyMultiSendCheck finds a MultiSend that makes no calls secure. It has none
+// of the effects that the rules of Article IV consider, whatever else the
+// transaction does.
+var emptyMultiSendCheck = check{
+	verdict:     Secure,
+	description: "MultiSend that makes no calls",
+	fn: func(_ context.Context, _ *safeID, c call) (bool, error) {
+		_, ok := multiSends[c.to]
+		return ok && c.equal(emptyMultiSend(c.to)), nil
+	},
+}
+
+// invalidMultiSendCheck finds a MultiSend call that reverts whatever the state
+// it runs in secure. Nothing that it does remains, so it has none of the
+// effects that the rules of Article IV consider, whatever else the transaction
+// does. The Safe may still pay a refund, which is a call of its own.
+var invalidMultiSendCheck = check{
+	verdict:     Secure,
+	description: "MultiSend call that always reverts",
+	fn: func(_ context.Context, _ *safeID, c call) (bool, error) {
+		_, ok := multiSends[c.to]
+		return ok && c.equal(revertingMultiSend(c.to)), nil
+	},
 }
 
 // expandTransactionCalls returns the calls that a Safe makes when it makes the

@@ -3,7 +3,6 @@
 package checks
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,27 +76,20 @@ func (c check) classification() Classification {
 	return Classification{Verdict: c.verdict, Rule: c.rule, Description: c.description}
 }
 
-// checks are the checks that Classify runs.
-var checks = []check{offNetwork}
+// checks are the checks that Classify runs, in the order that it runs them.
+// They are grouped by verdict, in verdictOrder.
+var checks = []check{offNetwork, emptyMultiSendCheck, invalidMultiSendCheck}
 
-// verdictOrder is the order in which Classify runs checks by verdict: a request
-// that is out of scope gets no security ruling, and a request that fails a rule
-// is insecure, whatever else holds for it (Charter § 3.9 and § 3.7).
+// verdictOrder is the order of the verdicts of checks: a request that is out of
+// scope gets no security ruling, and a request that fails a rule is insecure,
+// whatever else holds for it (Charter § 3.9 and § 3.7).
 var verdictOrder = []Verdict{OutOfScope, Insecure, Secure}
-
-// ordered returns checks in the order that Classify runs them: grouped by
-// verdict in verdictOrder, and otherwise in their order in checks.
-func ordered(checks []check) []check {
-	return slices.SortedStableFunc(slices.Values(checks), func(a, b check) int {
-		return cmp.Compare(slices.Index(verdictOrder, a.verdict), slices.Index(verdictOrder, b.verdict))
-	})
-}
 
 // List returns the classifications of the checks, in the order that Classify
 // runs them.
 func List() []Classification {
 	list := []Classification{}
-	for _, c := range ordered(checks) {
+	for _, c := range checks {
 		list = append(list, c.classification())
 	}
 	return list
@@ -112,12 +104,13 @@ func Classify(ctx context.Context, request *safenet.Request) (Classification, er
 	return classify(ctx, checks, request)
 }
 
+// classify is Classify with checks, which must be grouped by verdict in
+// verdictOrder.
 func classify(ctx context.Context, checks []check, request *safenet.Request) (Classification, error) {
 	tx, err := components(&request.Proposal.Transaction)
 	if err != nil {
 		return Classification{}, err
 	}
-	checks = ordered(checks)
 	secure := slices.IndexFunc(checks, func(c check) bool { return c.verdict == Secure })
 	if secure < 0 {
 		secure = len(checks)

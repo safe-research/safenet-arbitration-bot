@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,8 +48,14 @@ func TestClassification(t *testing.T) {
 }
 
 // TestChecks checks that every check has a verdict and a description, and a
-// rule if and only if it is for insecure requests.
+// rule if and only if it is for insecure requests, and that the checks are
+// grouped by verdict in verdictOrder.
 func TestChecks(t *testing.T) {
+	if !slices.IsSortedFunc(checks, func(a, b check) int {
+		return cmp.Compare(slices.Index(verdictOrder, a.verdict), slices.Index(verdictOrder, b.verdict))
+	}) {
+		t.Errorf("checks are not grouped by verdict in the order %q", verdictOrder)
+	}
 	for _, c := range checks {
 		if !slices.Contains(verdictOrder, c.verdict) || c.description == "" || c.fn == nil ||
 			(c.rule != "") != (c.verdict == Insecure) {
@@ -103,13 +110,13 @@ func TestClassify(t *testing.T) {
 		{
 			"out of scope before insecure",
 			safenet.SafeTransaction{},
-			[]check{secure, insecure, outOfScope},
+			[]check{outOfScope, insecure, secure},
 			outOfScope.classification(),
 			nil,
 		},
-		{"insecure before secure", safenet.SafeTransaction{}, []check{secure, abstain, insecure}, insecure.classification(), nil},
+		{"insecure before secure", safenet.SafeTransaction{}, []check{abstain, insecure, secure}, insecure.classification(), nil},
 		{"error", safenet.SafeTransaction{}, []check{abstain, fail, insecure}, Classification{}, errCheck},
-		{"match before error", safenet.SafeTransaction{}, []check{fail, outOfScope}, outOfScope.classification(), nil},
+		{"match before error", safenet.SafeTransaction{}, []check{outOfScope, fail}, outOfScope.classification(), nil},
 		{"error before match", safenet.SafeTransaction{}, []check{fail, secure}, Classification{}, errCheck},
 		{"secure error", safenet.SafeTransaction{}, []check{failSecure, secure}, Classification{}, errCheck},
 		{"secure match before error", safenet.SafeTransaction{}, []check{secure, failSecure}, secure.classification(), nil},
@@ -153,25 +160,6 @@ func TestClassify(t *testing.T) {
 				t.Errorf("classify() = %+v, %v; want %+v, %v", got, err, test.want, test.err)
 			}
 		})
-	}
-}
-
-func TestOrdered(t *testing.T) {
-	checks := []check{
-		{verdict: Secure, description: "secure 1"},
-		{verdict: Insecure, rule: "R-4.1", description: "insecure 1"},
-		{verdict: OutOfScope, description: "out of scope 1"},
-		{verdict: Secure, description: "secure 2"},
-		{verdict: OutOfScope, description: "out of scope 2"},
-		{verdict: Insecure, rule: "R-4.2", description: "insecure 2"},
-	}
-	var got []string
-	for _, c := range ordered(checks) {
-		got = append(got, c.description)
-	}
-	want := []string{"out of scope 1", "out of scope 2", "insecure 1", "insecure 2", "secure 1", "secure 2"}
-	if !slices.Equal(got, want) {
-		t.Errorf("ordered() = %q, want %q", got, want)
 	}
 }
 
