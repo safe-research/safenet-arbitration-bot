@@ -18,17 +18,19 @@ func openSafenet(ctx context.Context, cfg config.Config, block uint64) (*safenet
 	oracle := cmp.Or(cfg.Oracle, safenet.DefaultOracle)
 	consensus := cmp.Or(cfg.Consensus, safenet.DefaultConsensus)
 
-	eth, err := ethrpc.NewClient(ctx, ethrpc.Gnosis, cfg.RPCs[ethrpc.Gnosis])
-	if err != nil {
-		return nil, 0, err
-	}
+	// The Safenet reuses the connection to Gnosis Chain for the latest block.
+	dial := ethrpc.NewDialer(cfg.RPCs)
 	at := ethrpc.BlockNumber(block)
 	if at == 0 {
+		eth, err := dial(ctx, ethrpc.Gnosis)
+		if err != nil {
+			return nil, 0, err
+		}
 		if at, err = eth.BlockNumber(ctx); err != nil {
 			return nil, 0, err
 		}
 	}
-	return safenet.New(eth, oracle, consensus), at, nil
+	return safenet.New(dial, oracle, consensus), at, nil
 }
 
 // writeJSON writes v to w as indented JSON.

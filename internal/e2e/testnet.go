@@ -1,9 +1,11 @@
 package e2e
 
 import (
+	"fmt"
 	"math/big"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/keccak256"
@@ -19,9 +21,12 @@ var (
 	disputeTriggeredEvent = solabi.Event("DisputeTriggered(bytes32,uint64)")
 )
 
-// Testnet runs Safenet requests on anvil.
+// Testnet runs Safenet requests on anvil. It embeds the Gnosis Chain node.
 type Testnet struct {
 	*Anvil
+	// Mainnet is an Ethereum Mainnet node without contracts, for finding the
+	// Mainnet blocks before proposals.
+	Mainnet   *Anvil
 	Artifacts *Artifacts
 	// Sponsor proposes the transactions and pays their fees.
 	Sponsor ethrpc.Address
@@ -33,15 +38,18 @@ type Testnet struct {
 	nonce uint64
 }
 
-// NewTestnet starts anvil with the artifacts installed, and funds the sponsor,
-// the sentinels, and the arbitrator. See StartAnvil for stateHistory. It skips
-// the test if anvil isn't installed, or in short mode.
+// NewTestnet starts a Gnosis Chain anvil node with the artifacts installed, and
+// funds the sponsor, the sentinels, and the arbitrator. See StartAnvil for
+// stateHistory. It also starts an Ethereum Mainnet node, whose genesis block is
+// an hour earlier. It skips the test if anvil isn't installed, or in short
+// mode.
 func NewTestnet(tb testing.TB, stateHistory int) *Testnet {
 	tb.Helper()
-	node := StartAnvil(tb, stateHistory)
+	mainnet := StartAnvil(tb, ethrpc.Mainnet, 0, "--timestamp", fmt.Sprint(time.Now().Add(-time.Hour).Unix()))
+	node := StartAnvil(tb, ethrpc.Gnosis, stateHistory)
 	a := LoadArtifacts(tb)
 	node.Install(a)
-	n := &Testnet{Anvil: node, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}
+	n := &Testnet{Anvil: node, Mainnet: mainnet, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}
 	n.ArbitrationTimeout = n.callUint64("ARBITRATION_TIMEOUT()")
 
 	// Fund the arbitrator with ether for gas, and the sponsor and sentinels with
@@ -55,6 +63,15 @@ func NewTestnet(tb testing.TB, stateHistory int) *Testnet {
 		n.Transact(account, a.FeeToken, calldata("approve(address,uint256)", a.Oracle, funds))
 	}
 	return n
+}
+
+// Arbot returns an Arbot configured to read both nodes. It first mines Mainnet
+// blocks up to the time of the latest Gnosis Chain block, so that arbot finds
+// the Mainnet block before each proposal.
+func (n *Testnet) Arbot() *Arbot {
+	n.tb.Helper()
+	n.Mainnet.MineUntil(n.Header(uint64(n.blockNumber())).Time())
+	return NewArbot(n.tb, n.Anvil, n.Mainnet)
 }
 
 // calldata returns the calldata for calling the function with signature, such
@@ -160,15 +177,20 @@ func (n *Testnet) ProposeInOneBlock(oracleData ...[]byte) []*Request {
 	return requests
 }
 
-// transaction returns a new Safe transaction on Ethereum Mainnet, which adds an
-// owner to the Safe. Its fields vary with its nonce, so that every one of them
-// is checked, and every other one is a delegate call.
+// transaction returns a new Safe transaction, which adds an owner to the Safe.
+// Its fields vary with its nonce, so that every one of them is checked: every
+// other one is a delegate call, and every third one is on Gnosis Chain instead
+// of Ethereum Mainnet.
 func (n *Testnet) transaction() *safenet.SafeTransaction {
 	n.nonce++
 	i := byte(n.nonce)
 	safe := ethrpc.Address{0: 0x5a, 19: 0xfe}
+	chainID := int64(ethrpc.Mainnet)
+	if i%3 == 0 {
+		chainID = ethrpc.Gnosis
+	}
 	return &safenet.SafeTransaction{
-		ChainID:        big.NewInt(ethrpc.Mainnet),
+		ChainID:        big.NewInt(chainID),
 		Safe:           safe,
 		To:             safe,
 		Value:          big.NewInt(int64(i)),

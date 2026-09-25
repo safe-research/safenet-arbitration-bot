@@ -3,6 +3,7 @@ package safenet
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -13,12 +14,16 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
-var update = flag.Bool("update", false, "update the golden files in testdata")
+var (
+	update = flag.Bool("update", false, "update the golden files in testdata")
+	record = flag.Bool("record", false, "record the block headers that testdata/headers.json lacks from each chain's default RPCs")
+)
 
 // fixture is a snapshot of the Gnosis Chain deployment as of a block: the call
 // results, logs, and block headers that Pending and Request read.
@@ -27,10 +32,27 @@ var update = flag.Bool("update", false, "update the golden files in testdata")
 // https://rpc.gnosischain.com, while running `arbot pending` and `arbot info`
 // for the requests in TestRequest, and for an unknown request ID, at the
 // fixture's block.
+//
+// testdata/headers.json holds, by chain ID, the block headers that Request
+// reads to find the blocks before each proposal: the proposal blocks' parents
+// on Gnosis Chain, and the latest block and the blocks that SearchBlock probes
+// on the other chains. Run TestRequest with -record to fetch the headers that
+// it lacks, such as after changing SearchBlock.
 type fixture struct {
 	Block  ethrpc.BlockNumber `json:"block"`
 	Calls  []fixtureCall      `json:"calls"`
 	Logs   []ethrpc.Log       `json:"logs"`
+	Blocks []ethrpc.Block     `json:"blocks"`
+
+	mu      sync.Mutex
+	headers map[uint64]*headers
+	// live are clients for the chains' default RPCs, for recording headers.
+	live map[uint64]*ethrpc.Client
+}
+
+// headers are the recorded block headers of a chain.
+type headers struct {
+	Latest ethrpc.BlockNumber `json:"latest,omitempty"`
 	Blocks []ethrpc.Block     `json:"blocks"`
 }
 
@@ -52,14 +74,159 @@ func loadFixture(t *testing.T) *fixture {
 	if err := json.Unmarshal(data, &f); err != nil {
 		t.Fatalf("decoding fixture: %v", err)
 	}
+	if data, err = os.ReadFile("testdata/headers.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &f.headers); err != nil {
+		t.Fatalf("decoding headers: %v", err)
+	}
+	f.live = make(map[uint64]*ethrpc.Client)
 	return &f
 }
 
 // open returns a Safenet that reads the default deployment from a node serving
-// the fixture.
+// the fixture, and the other chains from nodes serving the recorded headers.
 func (f *fixture) open(t *testing.T) *Safenet {
 	t.Helper()
-	return New(f.serve(t), DefaultOracle, DefaultConsensus)
+	return New(f.dial(t), DefaultOracle, DefaultConsensus)
+}
+
+// dial returns a Dialer for a node that serves the fixture on Gnosis Chain, and
+// for nodes that serve the recorded headers of the other chains.
+func (f *fixture) dial(t *testing.T) ethrpc.Dialer {
+	t.Helper()
+	gnosis := f.serve(t)
+	return func(ctx context.Context, chainID uint64) (*ethrpc.Client, error) {
+		if chainID == ethrpc.Gnosis {
+			return gnosis, nil
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				ID     uint64            `json:"id"`
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var result any
+			var err error
+			switch req.Method {
+			case "eth_chainId":
+				result = ethrpc.Quantity(chainID)
+			case "eth_blockNumber":
+				result, err = f.latest(ctx, chainID)
+			case "eth_getBlockByNumber":
+				var number ethrpc.BlockNumber
+				var full bool
+				if err = decodeParams(req.Params, &number, &full); err == nil {
+					result, err = f.header(ctx, chainID, number)
+				}
+			default:
+				err = fmt.Errorf("unexpected method")
+			}
+			if err != nil {
+				t.Errorf("chain %d: %s: %v", chainID, req.Method, err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+		}))
+		t.Cleanup(server.Close)
+		return ethrpc.NewClient(ctx, chainID, server.URL)
+	}
+}
+
+// chain returns the recorded headers of the chain with the given ID. It must be
+// called with f.mu held.
+func (f *fixture) chain(chainID uint64) *headers {
+	if f.headers == nil {
+		f.headers = make(map[uint64]*headers)
+	}
+	if f.headers[chainID] == nil {
+		f.headers[chainID] = &headers{Blocks: []ethrpc.Block{}}
+	}
+	return f.headers[chainID]
+}
+
+// latest returns the recorded latest block of the chain with the given ID. With
+// -record, it records the chain's latest block if it has none.
+func (f *fixture) latest(ctx context.Context, chainID uint64) (ethrpc.BlockNumber, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.chain(chainID)
+	if h.Latest == 0 && *record {
+		eth, err := f.liveClient(ctx, chainID)
+		if err != nil {
+			return 0, err
+		}
+		if h.Latest, err = eth.BlockNumber(ctx); err != nil {
+			return 0, err
+		}
+	}
+	if h.Latest == 0 {
+		return 0, fmt.Errorf("no recorded latest block; run TestRequest with -record")
+	}
+	return h.Latest, nil
+}
+
+// header returns the recorded header of block number on the chain with the
+// given ID. With -record, it records the header if it is missing.
+func (f *fixture) header(ctx context.Context, chainID uint64, number ethrpc.BlockNumber) (ethrpc.Block, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.chain(chainID)
+	for _, block := range h.Blocks {
+		if block.Number == number {
+			return block, nil
+		}
+	}
+	if !*record {
+		return ethrpc.Block{}, fmt.Errorf("no recorded block %d; run TestRequest with -record", number)
+	}
+	eth, err := f.liveClient(ctx, chainID)
+	if err != nil {
+		return ethrpc.Block{}, err
+	}
+	block, err := eth.BlockByNumber(ctx, number)
+	if err != nil {
+		return ethrpc.Block{}, err
+	}
+	h.Blocks = append(h.Blocks, block)
+	return block, nil
+}
+
+// liveClient returns a client for a default RPC of the chain with the given ID.
+// It must be called with f.mu held.
+func (f *fixture) liveClient(ctx context.Context, chainID uint64) (*ethrpc.Client, error) {
+	if eth := f.live[chainID]; eth != nil {
+		return eth, nil
+	}
+	eth, err := ethrpc.NewClient(ctx, chainID, "")
+	if err != nil {
+		return nil, err
+	}
+	f.live[chainID] = eth
+	return eth, nil
+}
+
+// saveHeaders writes the recorded headers to testdata/headers.json, formatted
+// as jq formats it.
+func (f *fixture) saveHeaders(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, h := range f.headers {
+		slices.SortFunc(h.Blocks, func(a, b ethrpc.Block) int { return cmp.Compare(a.Number, b.Number) })
+	}
+	data, err := json.MarshalIndent(f.headers, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("testdata/headers.json", append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // serve returns a client for a node that serves the fixture. A request that the
@@ -150,7 +317,11 @@ func (f *fixture) handle(method string, params []json.RawMessage) (any, *ethrpc.
 				return block, nil, nil
 			}
 		}
-		return nil, nil, fmt.Errorf("no recorded block %d", number)
+		block, err := f.header(context.Background(), ethrpc.Gnosis, number)
+		if err != nil {
+			return nil, nil, err
+		}
+		return block, nil, nil
 	}
 	return nil, nil, fmt.Errorf("unexpected method")
 }
@@ -282,6 +453,9 @@ func TestRequest(t *testing.T) {
 	}
 
 	f := loadFixture(t)
+	if *record {
+		t.Cleanup(func() { f.saveHeaders(t) })
+	}
 	sn := f.open(t)
 	var requests []*Request
 	for _, test := range tests {
@@ -330,6 +504,59 @@ func TestRequest(t *testing.T) {
 	}
 }
 
+// TestRequestBlocks checks the blocks before proposals of Safe transactions on
+// another chain, on Gnosis Chain, and on Ethereum Mainnet. The Arbitrum and
+// Mainnet blocks were checked with cast: they are the last ones before the
+// proposal time, and the next Arbitrum block is at the proposal time.
+func TestRequestBlocks(t *testing.T) {
+	tests := []struct {
+		name           string
+		id             ethrpc.Hash
+		ethereum, safe uint64
+	}{
+		{"Arbitrum", frozenID, 26034967, 507875025},
+		// The Gnosis Chain block before the proposal block.
+		{"Gnosis Chain", insecureID, 26047854, 48415710},
+		{"Ethereum Mainnet", secureID, 26047997, 26047997},
+	}
+	f := loadFixture(t)
+	sn := f.open(t)
+	for _, test := range tests {
+		request, err := sn.Request(t.Context(), test.id, f.Block)
+		if err != nil {
+			t.Errorf("Request(%s): %v", test.name, err)
+			continue
+		}
+		p := request.Proposal
+		if p.EthereumBlock != test.ethereum || p.SafeBlock != test.safe {
+			t.Errorf("Request(%s): got Ethereum block %d and Safe chain block %d before the proposal, want %d and %d",
+				test.name, p.EthereumBlock, p.SafeBlock, test.ethereum, test.safe)
+		}
+	}
+}
+
+func TestRequestDialError(t *testing.T) {
+	f := loadFixture(t)
+	fixtureDial := f.dial(t)
+	// Only Gnosis Chain can be reached.
+	dial := func(ctx context.Context, chainID uint64) (*ethrpc.Client, error) {
+		if chainID == ethrpc.Gnosis {
+			return fixtureDial(ctx, chainID)
+		}
+		return nil, errors.New("no RPC")
+	}
+	sn := New(dial, DefaultOracle, DefaultConsensus)
+	wantError(t, sn, frozenID, f.Block, "connecting to chain 1: no RPC")
+	wantError(t, sn, frozenID, f.Block, "connecting to chain 42161: no RPC")
+
+	// Nothing can be reached.
+	sn = New(func(context.Context, uint64) (*ethrpc.Client, error) { return nil, errors.New("no RPC") }, DefaultOracle, DefaultConsensus)
+	wantError(t, sn, frozenID, f.Block, "connecting to Gnosis Chain: no RPC")
+	if _, err := sn.Pending(t.Context(), f.Block); err == nil || !strings.Contains(err.Error(), "connecting to Gnosis Chain: no RPC") {
+		t.Errorf("Pending: got error %v, want one saying that Gnosis Chain can't be reached", err)
+	}
+}
+
 func TestRequestNotFound(t *testing.T) {
 	f := loadFixture(t)
 	id := ethrpc.Hash{31: 1}
@@ -340,7 +567,7 @@ func TestRequestNotFound(t *testing.T) {
 
 func TestRequestWrongConsensus(t *testing.T) {
 	f := loadFixture(t)
-	sn := New(f.serve(t), DefaultOracle, ethrpc.Address{19: 1})
+	sn := New(f.dial(t), DefaultOracle, ethrpc.Address{19: 1})
 	wantError(t, sn, frozenID, f.Block, "has PROPOSER")
 }
 

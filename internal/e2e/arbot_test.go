@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/e2e"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -60,7 +61,7 @@ func TestPendingAndInfo(t *testing.T) {
 	pending := n.Propose(nil)
 	n.Commit(pending.Approve(s3))
 
-	arbot := e2e.NewArbot(t, n.Anvil)
+	arbot := n.Arbot()
 
 	t.Run("pending", func(t *testing.T) {
 		deadline := frozen.FrozenBlock + n.ArbitrationTimeout
@@ -119,6 +120,15 @@ func TestPendingAndInfo(t *testing.T) {
 			}
 			if want := canonical(t, r.Transaction); !reflect.DeepEqual(canonical(t, p.Transaction), want) {
 				t.Errorf("Safe transaction: got %s, want %s", p.Transaction, want)
+			}
+			if p.Time != n.Header(r.Block).Time() {
+				t.Errorf("proposal: got time %s, want that of block %d", p.Time, r.Block)
+			}
+			checkBlockBefore(t, n.Mainnet, "Ethereum", p.EthereumBlock, p.Time)
+			if r.Transaction.ChainID.Uint64() == ethrpc.Gnosis {
+				checkBlockBefore(t, n.Anvil, "Gnosis Chain", p.SafeBlock, p.Time)
+			} else if p.SafeBlock != p.EthereumBlock {
+				t.Errorf("proposal: got Safe chain block %d, want Ethereum block %d", p.SafeBlock, p.EthereumBlock)
 			}
 
 			var votes []vote
@@ -196,7 +206,7 @@ func TestBlock(t *testing.T) {
 	frozen := n.Propose(nil)
 	n.Vote(frozen.Approve(s1), frozen.Deny(s2, "R-4.1"))
 	n.Mine(1)
-	arbot := e2e.NewArbot(t, n.Anvil)
+	arbot := n.Arbot()
 
 	before, after := fmt.Sprint(frozen.FrozenBlock-1), fmt.Sprint(frozen.FrozenBlock)
 	if got := decode[[]safenet.Dispute](t, arbot.Run(t, "pending", "-json", "-block", before)); len(got) != 0 {
@@ -215,6 +225,16 @@ func TestBlock(t *testing.T) {
 	}
 }
 
+// checkBlockBefore checks that block is the last block of the node's chain
+// before t.
+func checkBlockBefore(t *testing.T, node *e2e.Anvil, chain string, block uint64, at time.Time) {
+	t.Helper()
+	if !node.Header(block).Time().Before(at) || node.Header(block+1).Time().Before(at) {
+		t.Errorf("proposal: got %s block %d at %s, then block %d at %s, want the last block before %s",
+			chain, block, node.Header(block).Time(), block+1, node.Header(block+1).Time(), at)
+	}
+}
+
 // requestInfo is the part of the JSON output of `arbot info` that the test
 // checks.
 type requestInfo struct {
@@ -226,13 +246,16 @@ type requestInfo struct {
 		DAOFeeShare uint32   `json:"daoFeeShare"`
 	} `json:"terms"`
 	Proposal struct {
-		Consensus   ethrpc.Address  `json:"consensus"`
-		Block       uint64          `json:"block"`
-		TxHash      ethrpc.Hash     `json:"txHash"`
-		Epoch       uint64          `json:"epoch"`
-		OracleData  ethrpc.Bytes    `json:"oracleData"`
-		SafeTxHash  ethrpc.Hash     `json:"safeTxHash"`
-		Transaction json.RawMessage `json:"transaction"`
+		Consensus     ethrpc.Address  `json:"consensus"`
+		Block         uint64          `json:"block"`
+		Time          time.Time       `json:"time"`
+		EthereumBlock uint64          `json:"ethereumBlock"`
+		SafeBlock     uint64          `json:"safeBlock"`
+		TxHash        ethrpc.Hash     `json:"txHash"`
+		Epoch         uint64          `json:"epoch"`
+		OracleData    ethrpc.Bytes    `json:"oracleData"`
+		SafeTxHash    ethrpc.Hash     `json:"safeTxHash"`
+		Transaction   json.RawMessage `json:"transaction"`
 	} `json:"proposal"`
 	Votes       []vote       `json:"votes"`
 	Arbitration *arbitration `json:"arbitration"`

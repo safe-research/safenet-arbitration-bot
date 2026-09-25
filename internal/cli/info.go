@@ -68,6 +68,8 @@ func writeRequest(w io.Writer, r *safenet.Request) {
 	fmt.Fprintf(w, "\nProposal\n")
 	fmt.Fprintf(w, "  Consensus\t%s\n", p.Consensus)
 	fmt.Fprintf(w, "  Block\t%d (%s)\n", p.Block, p.Time.Format(time.RFC3339))
+	fmt.Fprintf(w, "  Ethereum block before\t%d\n", p.EthereumBlock)
+	fmt.Fprintf(w, "  Safe chain block before\t%d (chain %s)\n", p.SafeBlock, p.Transaction.ChainID)
 	fmt.Fprintf(w, "  Transaction\t%s\n", p.TxHash)
 	fmt.Fprintf(w, "  Epoch\t%d\n", p.Epoch)
 	fmt.Fprintf(w, "  Oracle data\t%s\n", p.OracleData)

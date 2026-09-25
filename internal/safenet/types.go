@@ -62,6 +62,12 @@ type Proposal struct {
 	// its timestamp.
 	Block uint64    `json:"block"`
 	Time  time.Time `json:"time"`
+	// EthereumBlock and SafeBlock are the last blocks before Time on Ethereum
+	// Mainnet and on the Safe's chain. Their state is what the proposal is judged
+	// against, without its own effects or later ones (Charter § 2.8 and § 3.6), and
+	// the Charter version to apply is the one at EthereumBlock.
+	EthereumBlock uint64 `json:"ethereumBlock"`
+	SafeBlock     uint64 `json:"safeBlock"`
 	// TxHash is the hash of the Gnosis Chain transaction that made the proposal.
 	TxHash     ethrpc.Hash  `json:"txHash"`
 	Epoch      uint64       `json:"epoch"`

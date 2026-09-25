@@ -2,28 +2,34 @@ package e2e
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/cli"
-	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
-// Arbot runs arbot in the test's process, configured to read Gnosis Chain from
-// a node. As the test imports arbot's implementation, changing it invalidates
-// the test's cached results.
+// Arbot runs arbot in the test's process, configured to read chains from nodes.
+// As the test imports arbot's implementation, changing it invalidates the
+// test's cached results.
 type Arbot struct {
 	config string
 }
 
-// NewArbot returns an Arbot configured to read Gnosis Chain from the node.
-func NewArbot(tb testing.TB, node *Anvil) *Arbot {
+// NewArbot returns an Arbot configured to read each node's chain from it.
+func NewArbot(tb testing.TB, nodes ...*Anvil) *Arbot {
 	tb.Helper()
+	rpcs := make(map[uint64]string)
+	for _, node := range nodes {
+		rpcs[node.ChainID()] = node.URL
+	}
+	data, err := json.Marshal(map[string]any{"rpcs": rpcs})
+	if err != nil {
+		tb.Fatal(err)
+	}
 	config := filepath.Join(tb.TempDir(), "config.json")
-	data := fmt.Sprintf(`{"rpcs": {"%d": %q}}`, ethrpc.Gnosis, node.URL)
-	if err := os.WriteFile(config, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(config, data, 0o644); err != nil {
 		tb.Fatal(err)
 	}
 	return &Arbot{config: config}

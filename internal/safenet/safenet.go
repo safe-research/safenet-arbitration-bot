@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
@@ -54,16 +56,32 @@ var arbitrationEvents = []ethrpc.Hash{
 
 // Safenet reads the requests of a SentinelOracle.
 type Safenet struct {
-	eth       *ethrpc.Client
+	dial      ethrpc.Dialer
 	oracle    ethrpc.Address
 	consensus ethrpc.Address
 }
 
 // New returns a Safenet that reads the SentinelOracle at oracle and the
-// Consensus contract at consensus, using eth, a client for the chain they are
-// deployed on. The oracle's PROPOSER must be consensus.
-func New(eth *ethrpc.Client, oracle, consensus ethrpc.Address) *Safenet {
-	return &Safenet{eth: eth, oracle: oracle, consensus: consensus}
+// Consensus contract at consensus on Gnosis Chain, whose PROPOSER must be
+// consensus. Each query connects to Gnosis Chain, and to Ethereum Mainnet and
+// the Safes' chains as needed, with dial.
+func New(dial ethrpc.Dialer, oracle, consensus ethrpc.Address) *Safenet {
+	return &Safenet{dial: dial, oracle: oracle, consensus: consensus}
+}
+
+// session is a Safenet connected to Gnosis Chain, for one query.
+type session struct {
+	*Safenet
+	eth *ethrpc.Client
+}
+
+// connect returns a session connected to Gnosis Chain.
+func (s *Safenet) connect(ctx context.Context) (*session, error) {
+	eth, err := s.dial(ctx, ethrpc.Gnosis)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Gnosis Chain: %w", err)
+	}
+	return &session{Safenet: s, eth: eth}, nil
 }
 
 // Pending returns the disputes awaiting arbitration as of block, ordered by
@@ -75,6 +93,14 @@ func New(eth *ethrpc.Client, oracle, consensus ethrpc.Address) *Safenet {
 // someone calls timeoutArbitration, as sentinels generally call it promptly to
 // reclaim their bonds.
 func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Dispute, error) {
+	q, err := s.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return q.pending(ctx, block)
+}
+
+func (s *session) pending(ctx context.Context, block ethrpc.BlockNumber) ([]Dispute, error) {
 	timeout, err := s.callUint64(ctx, block, arbitrationTimeoutSelector)
 	if err != nil {
 		return nil, err
@@ -124,6 +150,14 @@ func (s *Safenet) Pending(ctx context.Context, block ethrpc.BlockNumber) ([]Disp
 // The proposal is taken from the Consensus logs, and only accepted if hashing
 // it gives both the logged Safe transaction hash and the request ID.
 func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, error) {
+	q, err := s.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return q.request(ctx, id, block)
+}
+
+func (s *session) request(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, error) {
 	request, progress, err := s.getRequest(ctx, id, block)
 	if err != nil {
 		return nil, err
@@ -150,6 +184,9 @@ func (s *Safenet) Request(ctx context.Context, id ethrpc.Hash, block ethrpc.Bloc
 	}
 	if request.Proposal, err = s.proposal(ctx, id, request.Terms.CommitDeadline-commitWindow); err != nil {
 		return nil, err
+	}
+	if err := s.proposalBlocks(ctx, &request.Proposal); err != nil {
+		return nil, fmt.Errorf("request %s: %w", id, err)
 	}
 
 	to := min(ethrpc.BlockNumber(request.Terms.RevealDeadline), block)
@@ -202,7 +239,7 @@ func (p progress) check(votes []Commitment) error {
 }
 
 // getRequest reads the oracle's record of a request (getRequest).
-func (s *Safenet) getRequest(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, progress, error) {
+func (s *session) getRequest(ctx context.Context, id ethrpc.Hash, block ethrpc.BlockNumber) (*Request, progress, error) {
 	result, err := s.eth.Call(ctx, ethrpc.CallRequest{To: s.oracle, Data: solabi.Call(getRequestSelector, id)}, block)
 	if isRevert(err, requestNotFoundSelector) {
 		return nil, progress{}, fmt.Errorf("request %s: %w", id, ErrRequestNotFound)
@@ -243,7 +280,7 @@ func (s *Safenet) getRequest(ctx context.Context, id ethrpc.Hash, block ethrpc.B
 
 // proposal finds the transaction proposal for request id, which was made in
 // block.
-func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (Proposal, error) {
+func (s *session) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (Proposal, error) {
 	logs, err := s.eth.GetLogs(ctx, ethrpc.LogFilter{
 		FromBlock: ethrpc.BlockNumber(block),
 		ToBlock:   ethrpc.BlockNumber(block),
@@ -277,6 +314,74 @@ func (s *Safenet) proposal(ctx context.Context, id ethrpc.Hash, block uint64) (P
 		return proposal, nil
 	}
 	return Proposal{}, fmt.Errorf("request %s: no proposal in block %d hashes to the request ID", id, block)
+}
+
+// proposalBlocks sets the blocks of p that are the last before its time on
+// Ethereum Mainnet and on the Safe's chain. It searches the chains
+// concurrently.
+func (s *session) proposalBlocks(ctx context.Context, p *Proposal) error {
+	if !p.Transaction.ChainID.IsUint64() {
+		return fmt.Errorf("the Safe transaction's chain ID %s is out of range", p.Transaction.ChainID)
+	}
+	safeChain := p.Transaction.ChainID.Uint64()
+	chains := []uint64{ethrpc.Mainnet}
+	if safeChain != ethrpc.Mainnet && safeChain != s.eth.ChainID() {
+		chains = append(chains, safeChain)
+	}
+	blocks := make([]uint64, len(chains))
+	errs := make([]error, len(chains))
+	var wg sync.WaitGroup
+	for i, chain := range chains {
+		wg.Go(func() { blocks[i], errs[i] = s.blockBefore(ctx, chain, p.Time) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+
+	p.EthereumBlock = blocks[0]
+	switch safeChain {
+	case s.eth.ChainID():
+		block, err := s.parentBlock(ctx, p)
+		if err != nil {
+			return err
+		}
+		p.SafeBlock = block
+	case ethrpc.Mainnet:
+		p.SafeBlock = p.EthereumBlock
+	default:
+		p.SafeBlock = blocks[1]
+	}
+	return nil
+}
+
+// parentBlock returns the last block before p's time on the chain of the
+// proposal. Gnosis Chain gives each block a later timestamp than its parent, so
+// this is the proposal block's parent. The search is for chains that don't.
+func (s *session) parentBlock(ctx context.Context, p *Proposal) (uint64, error) {
+	parent, err := s.eth.BlockByNumber(ctx, ethrpc.BlockNumber(p.Block-1))
+	if err != nil {
+		return 0, fmt.Errorf("getting the block before the proposal: %w", err)
+	}
+	if !parent.Time().Before(p.Time) {
+		if parent, err = s.eth.SearchBlock(ctx, p.Time); err != nil {
+			return 0, err
+		}
+	}
+	return uint64(parent.Number), nil
+}
+
+// blockBefore returns the last block before t on the chain with the given ID.
+func (s *session) blockBefore(ctx context.Context, chainID uint64, t time.Time) (uint64, error) {
+	eth, err := s.dial(ctx, chainID)
+	if err != nil {
+		return 0, fmt.Errorf("connecting to chain %d: %w", chainID, err)
+	}
+	block, err := eth.SearchBlock(ctx, t)
+	if err != nil {
+		return 0, fmt.Errorf("chain %d: %w", chainID, err)
+	}
+	return uint64(block.Number), nil
 }
 
 // decodeProposal decodes a TransactionProposed log.
@@ -315,7 +420,7 @@ func decodeProposal(log ethrpc.Log) (Proposal, error) {
 
 // votes returns the sentinels' votes on request id, in commit order, from the
 // oracle logs in blocks from to to.
-func (s *Safenet) votes(ctx context.Context, id ethrpc.Hash, from, to ethrpc.BlockNumber) ([]Commitment, error) {
+func (s *session) votes(ctx context.Context, id ethrpc.Hash, from, to ethrpc.BlockNumber) ([]Commitment, error) {
 	votes := []Commitment{}
 	index := make(map[ethrpc.Address]int)
 	logs := s.eth.ScanLogs(ctx, ethrpc.LogFilter{
@@ -374,7 +479,7 @@ var outcomeStates = map[Outcome]State{
 // arbitration returns the arbitration of the frozen request id, as of block.
 // The request was frozen in the block ARBITRATION_TIMEOUT blocks before its
 // deadline, and a request that is no longer frozen was settled after that.
-func (s *Safenet) arbitration(ctx context.Context, id ethrpc.Hash, state State, deadline, timeout uint64, block ethrpc.BlockNumber) (*Arbitration, error) {
+func (s *session) arbitration(ctx context.Context, id ethrpc.Hash, state State, deadline, timeout uint64, block ethrpc.BlockNumber) (*Arbitration, error) {
 	if timeout > deadline {
 		return nil, fmt.Errorf("request %s: arbitration deadline %d is before ARBITRATION_TIMEOUT %d", id, deadline, timeout)
 	}
@@ -445,7 +550,7 @@ func (s *Safenet) arbitration(ctx context.Context, id ethrpc.Hash, state State, 
 
 // call calls a SentinelOracle function without arguments, and returns a decoder
 // for its return data.
-func (s *Safenet) call(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (*solabi.Decoder, error) {
+func (s *session) call(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (*solabi.Decoder, error) {
 	result, err := s.eth.Call(ctx, ethrpc.CallRequest{To: s.oracle, Data: solabi.Call(selector)}, block)
 	if err != nil {
 		return nil, fmt.Errorf("calling SentinelOracle %s: %w", s.oracle, err)
@@ -453,7 +558,7 @@ func (s *Safenet) call(ctx context.Context, block ethrpc.BlockNumber, selector [
 	return solabi.NewDecoder(result), nil
 }
 
-func (s *Safenet) callUint64(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (uint64, error) {
+func (s *session) callUint64(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (uint64, error) {
 	d, err := s.call(ctx, block, selector)
 	if err != nil {
 		return 0, err
@@ -465,7 +570,7 @@ func (s *Safenet) callUint64(ctx context.Context, block ethrpc.BlockNumber, sele
 	return value, nil
 }
 
-func (s *Safenet) callAddress(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (ethrpc.Address, error) {
+func (s *session) callAddress(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (ethrpc.Address, error) {
 	d, err := s.call(ctx, block, selector)
 	if err != nil {
 		return ethrpc.Address{}, err
@@ -477,7 +582,7 @@ func (s *Safenet) callAddress(ctx context.Context, block ethrpc.BlockNumber, sel
 	return value, nil
 }
 
-func (s *Safenet) callString(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (string, error) {
+func (s *session) callString(ctx context.Context, block ethrpc.BlockNumber, selector [4]byte) (string, error) {
 	d, err := s.call(ctx, block, selector)
 	if err != nil {
 		return "", err

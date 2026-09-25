@@ -15,23 +15,30 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
-// Anvil is a local anvil node with the chain ID of Gnosis Chain, which
-// impersonates any account that sends it a transaction. It embeds a client for
-// the node, and adds anvil's own methods.
+// Anvil is a local anvil node, which impersonates any account that sends it a
+// transaction. It embeds a client for the node, and adds anvil's own methods.
 type Anvil struct {
 	*ethrpc.Client
 	tb  testing.TB
 	URL string
+	// BlockTime is the time between blocks, in seconds, which is that of the chain
+	// whose ID the node has.
+	BlockTime uint64
 }
 
-// StartAnvil starts an anvil node, which runs until the test ends. It skips the
-// test if anvil isn't installed, or in short mode.
+// blockTimes are the times between blocks, in seconds, of the chains whose IDs
+// anvil nodes can have.
+var blockTimes = map[uint64]uint64{ethrpc.Mainnet: 12, ethrpc.Gnosis: 5}
+
+// StartAnvil starts an anvil node for the chain with the given ID, which runs
+// until the test ends, passing args to anvil. It skips the test if anvil isn't
+// installed, or in short mode.
 //
 // The node keeps the state of the latest stateHistory blocks before the latest
 // one, for calls at those blocks, and calls at older blocks fail. Keeping any
 // history makes mining an order of magnitude slower, as anvil snapshots the
 // state of every block, so tests that mine many blocks should keep none.
-func StartAnvil(tb testing.TB, stateHistory int) *Anvil {
+func StartAnvil(tb testing.TB, chainID uint64, stateHistory int, args ...string) *Anvil {
 	tb.Helper()
 	if testing.Short() {
 		tb.Skip("skipping end-to-end test in short mode")
@@ -41,10 +48,15 @@ func StartAnvil(tb testing.TB, stateHistory int) *Anvil {
 		tb.Skip("skipping end-to-end test: anvil is not installed")
 	}
 
-	args := []string{"--chain-id", fmt.Sprint(ethrpc.Gnosis), "--port", "0", "--auto-impersonate", "--prune-history"}
-	if stateHistory > 0 {
-		args = append(args, fmt.Sprint(stateHistory+1))
+	blockTime, ok := blockTimes[chainID]
+	if !ok {
+		tb.Fatalf("no block time for chain %d", chainID)
 	}
+	anvilArgs := []string{"--chain-id", fmt.Sprint(chainID), "--port", "0", "--auto-impersonate", "--prune-history"}
+	if stateHistory > 0 {
+		anvilArgs = append(anvilArgs, fmt.Sprint(stateHistory+1))
+	}
+	args = append(anvilArgs, args...)
 	// The test's context is canceled before its cleanup functions run, which kills
 	// anvil.
 	cmd := exec.CommandContext(tb.Context(), path, args...)
@@ -62,11 +74,15 @@ func StartAnvil(tb testing.TB, stateHistory int) *Anvil {
 		if address, ok := strings.CutPrefix(lines.Text(), "Listening on "); ok {
 			go io.Copy(io.Discard, stdout)
 			url := "http://" + address
-			eth, err := ethrpc.NewClient(tb.Context(), ethrpc.Gnosis, url)
+			eth, err := ethrpc.NewClient(tb.Context(), chainID, url)
 			if err != nil {
 				tb.Fatal(err)
 			}
-			return &Anvil{Client: eth, tb: tb, URL: url}
+			a := &Anvil{Client: eth, tb: tb, URL: url, BlockTime: blockTime}
+			// Space all blocks BlockTime seconds apart, like the chain's, rather than at
+			// the time they are mined, which can give many blocks the same time.
+			a.rpc(nil, "anvil_setBlockTimestampInterval", blockTime)
+			return a
 		}
 	}
 	tb.Fatalf("anvil exited without listening: %v", lines.Err())
@@ -103,13 +119,29 @@ func (a *Anvil) blockNumber() ethrpc.BlockNumber {
 	return n
 }
 
-// blockTime is the time between blocks on Gnosis Chain, in seconds.
-const blockTime = 5
+// Header returns the header of block number.
+func (a *Anvil) Header(number uint64) ethrpc.Block {
+	a.tb.Helper()
+	block, err := a.BlockByNumber(a.tb.Context(), ethrpc.BlockNumber(number))
+	if err != nil {
+		a.tb.Fatal(err)
+	}
+	return block
+}
 
-// Mine mines n empty blocks, blockTime seconds apart.
+// Mine mines n empty blocks, BlockTime seconds apart.
 func (a *Anvil) Mine(n uint64) {
 	a.tb.Helper()
-	a.rpc(nil, "anvil_mine", ethrpc.Quantity(n), ethrpc.Quantity(blockTime))
+	a.rpc(nil, "anvil_mine", ethrpc.Quantity(n), ethrpc.Quantity(a.BlockTime))
+}
+
+// MineUntil mines empty blocks, BlockTime seconds apart, until the latest block
+// is at or after t.
+func (a *Anvil) MineUntil(t time.Time) {
+	a.tb.Helper()
+	if latest := a.Header(uint64(a.blockNumber())).Time(); latest.Before(t) {
+		a.Mine(uint64(t.Sub(latest)/time.Second)/a.BlockTime + 1)
+	}
 }
 
 // MineTo mines empty blocks until block is the latest block.
