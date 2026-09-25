@@ -28,9 +28,10 @@ var commands = map[string]struct {
 	run         func(ctx context.Context, e *env, args []string) error
 	description string
 }{
-	"charter": {charter, "fetch the Safenet Arbitration Charter"},
-	"info":    {info, "show a Safenet request, its proposal, votes, and arbitration"},
-	"pending": {pending, "list the disputed Safenet requests awaiting arbitration"},
+	"charter":  {charter, "fetch the Safenet Arbitration Charter"},
+	"classify": {classify, "classify a Safenet request with deterministic Charter checks"},
+	"info":     {info, "show a Safenet request, its proposal, votes, and arbitration"},
+	"pending":  {pending, "list the disputed Safenet requests awaiting arbitration"},
 }
 
 // usageError is an error in the command-line arguments, for which arbot exits

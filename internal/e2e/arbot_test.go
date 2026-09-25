@@ -14,9 +14,9 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 )
 
-// TestPendingAndInfo runs `arbot pending` and `arbot info` against the default
-// Safenet deployment's contracts on anvil, with requests in every state and
-// with every arbitration outcome.
+// TestPendingAndInfo runs `arbot pending`, `arbot info` and `arbot classify`
+// against the default Safenet deployment's contracts on anvil, with requests in
+// every state and with every arbitration outcome.
 func TestPendingAndInfo(t *testing.T) {
 	t.Parallel()
 	// Timing out an arbitration mines many blocks, so anvil keeps no history.
@@ -168,6 +168,21 @@ func TestPendingAndInfo(t *testing.T) {
 		stderr := arbot.Fail(t, 1, "info", ethrpc.Hash{31: 1}.String())
 		if !bytes.Contains(stderr, []byte("request not found")) {
 			t.Errorf("info: got error %q, want one saying that the request was not found", stderr)
+		}
+	})
+
+	// There are no checks yet, so every request is unclassified.
+	t.Run("classify", func(t *testing.T) {
+		got := decode[map[string]any](t, arbot.Run(t, "classify", "-json", frozen.ID.String()))
+		if want := map[string]any{"verdict": nil}; !reflect.DeepEqual(got, want) {
+			t.Errorf("classify: got %v, want %v", got, want)
+		}
+		if got := string(arbot.Run(t, "classify", frozen.ID.String())); got != "unclassified\n" {
+			t.Errorf("classify: got output %q, want %q", got, "unclassified\n")
+		}
+		stderr := arbot.Fail(t, 1, "classify", ethrpc.Hash{31: 1}.String())
+		if !bytes.Contains(stderr, []byte("request not found")) {
+			t.Errorf("classify: got error %q, want one saying that the request was not found", stderr)
 		}
 	})
 }
