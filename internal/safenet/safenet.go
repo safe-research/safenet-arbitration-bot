@@ -364,6 +364,17 @@ func (s *Safenet) votes(ctx context.Context, id ethrpc.Hash, from, to ethrpc.Blo
 	return votes, nil
 }
 
+// outcomeStates are the states that the outcomes of an arbitration leave the
+// request in. Declining to rule and timing out both refund the request, like a
+// request that no sentinel revealed a vote on.
+var outcomeStates = map[Outcome]State{
+	OutcomePending:    StateFrozen,
+	OutcomeSecure:     StateResolvedApproved,
+	OutcomeInsecure:   StateResolvedDenied,
+	OutcomeOutOfScope: StateTimedOut,
+	OutcomeTimedOut:   StateTimedOut,
+}
+
 // arbitration returns the arbitration of the frozen request id, as of block.
 // The request was frozen in the block ARBITRATION_TIMEOUT blocks before its
 // deadline, and a request that is no longer frozen was settled after that.
@@ -430,7 +441,7 @@ func (s *Safenet) arbitration(ctx context.Context, id ethrpc.Hash, state State, 
 	if !frozen {
 		return nil, fmt.Errorf("request %s: no DisputeTriggered log in block %d", id, arbitration.FrozenBlock)
 	}
-	if (state == StateFrozen) != (arbitration.Outcome == OutcomePending) {
+	if outcomeStates[arbitration.Outcome] != state {
 		return nil, fmt.Errorf("request %s is %s, but its arbitration logs have outcome %s", id, state, arbitration.Outcome)
 	}
 	return arbitration, nil

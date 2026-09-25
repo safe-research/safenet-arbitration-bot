@@ -53,5 +53,14 @@ check-agent-stubs:
         done
     done
 
+# Check that the JSON test data is formatted as `jq .` formats it.
+check-testdata:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for file in $(find . -path '*/testdata/*' -name '*.json'); do
+        jq . "$file" | cmp -s - "$file" \
+            || { echo "$file is not formatted with jq"; exit 1; }
+    done
+
 # Run all pre-commit checks.
-precommit: fix check test check-agent-stubs
+precommit: fix check test check-agent-stubs check-testdata

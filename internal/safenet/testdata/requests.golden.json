@@ -1,0 +1,414 @@
+[
+  {
+    "id": "0x062be5de4a4ca7123b0894a48807d09ca0e445c282e48dc3601e141bd32b48cb",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "FROZEN",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48385784,
+      "revealDeadline": 48385790
+    },
+    "fee": 400000000000000000,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48385778,
+      "time": "2026-09-22T18:59:20Z",
+      "txHash": "0xe55981e7d8373a225cba6c814ac8dcaaef66d14c1b1a8bb4f878b655c4c1d05f",
+      "epoch": 161285,
+      "oracleData": "0x",
+      "safeTxHash": "0xea6f04a866f107949f795b60dbcbe9563ab67ee232bbb14c7b85644dc9fce221",
+      "transaction": {
+        "chainId": 42161,
+        "safe": "0xffeb4c9456318130ca3a6d77a87f2d290ecae32b",
+        "to": "0x2b28dcc56eafacf5b346324bf90d128272335d2b",
+        "value": 0,
+        "data": "0x6a761202000000000000000000000000ae3073ab93dade55e8b9390e5f3a3071b1ec99ec000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025aa0f9a42ee4ea2dc7f3c9ff02f558dcb0445a300000000000000000000000000000000000000000000000000000000000002c00000000000000000000000000000000000000000000000000000000000000144389f87ff00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000100000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e58310000000000000000000000002f2a2543b76a4166549f7aab2e75bef0aefc5b0f00000000000000000000000088193fcb705d29724a40bb818ecaa47dd5f014d900000000000000000000000066f30587fb8d4206918deb78eca7d5ebbafd06da0000000000000000000000000000000000000000000000000bef55718ad60000000000000000000000000000000000000000000000000000000000000206cc800000000000000000000000002b28dcc56eafacf5b346324bf90d128272335d2b000000000000000000000000ffeb4c9456318130ca3a6d77a87f2d290ecae32b000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041000000000000000000000000ffeb4c9456318130ca3a6d77a87f2d290ecae32b00000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000",
+        "operation": "CALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 1435
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xe2eed4938d2fd005cb8744011031041eb5349536",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      },
+      {
+        "sentinel": "0x6d081448c04d9ef7cf8ecf54207b1931ecc25312",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.2"
+      }
+    ],
+    "arbitration": {
+      "frozenBlock": 48385788,
+      "deadline": 48436188,
+      "outcome": "pending"
+    }
+  },
+  {
+    "id": "0x3c25a142c4a7e1eaac635f2f271acc4d7d9ed9109c54321b25556ca68e5dfa6b",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "RESOLVED_DENIED",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48415717,
+      "revealDeadline": 48415723
+    },
+    "fee": 360000000000000000,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48415711,
+      "time": "2026-09-24T14:17:05Z",
+      "txHash": "0x8ce99a668ad6ed42630a3cb6107b71182744a01fa1289569489391f43d769526",
+      "epoch": 161385,
+      "oracleData": "0x",
+      "safeTxHash": "0x908d14cdb1131dbfcbce10626447009a1dd6284804245ad49ec53f9a463cdda1",
+      "transaction": {
+        "chainId": 100,
+        "safe": "0xb60b8be042c8dd0f337083bbe58555be1ec20c71",
+        "to": "0xb60b8be042c8dd0f337083bbe58555be1ec20c71",
+        "value": 0,
+        "data": "0x0d582f130000000000000000000000002937abdbadfafe5041dd6a0eef73797f2eaed0720000000000000000000000000000000000000000000000000000000000000002",
+        "operation": "CALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 0
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      },
+      {
+        "sentinel": "0x6d081448c04d9ef7cf8ecf54207b1931ecc25312",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.1"
+      }
+    ],
+    "arbitration": {
+      "frozenBlock": 48415721,
+      "deadline": 48466121,
+      "outcome": "insecure",
+      "slashed": 8000000000000000000,
+      "context": "R-4.1 - Settings-change blocking - Adds owner with threshold change",
+      "record": {
+        "block": 48415765,
+        "txHash": "0x76816c1dc733c88eab9e5c55de273df3cc3ded695e0699d3dbd29b09a248106d"
+      }
+    }
+  },
+  {
+    "id": "0x68f9225d10c8f8bf8b8a13821d7bcfe70a4f65c63121d154ef13c01bcc17c36c",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "RESOLVED_APPROVED",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48416061,
+      "revealDeadline": 48416067
+    },
+    "fee": 360000000000000000,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48416055,
+      "time": "2026-09-24T14:46:05Z",
+      "txHash": "0xff511d2b72c80f27ad8a4161a25aecc876347b57841e93c5e772d50cdcf3bab1",
+      "epoch": 161386,
+      "oracleData": "0x",
+      "safeTxHash": "0x2b203aee363aa55a6e6be00635d99ede96a3e47f668f1cf2796ceeaa53b49451",
+      "transaction": {
+        "chainId": 1,
+        "safe": "0x4f83c0b5685733cf594792736bf4e428742539f7",
+        "to": "0x23878914efe38d27c4d67ab83ed1b93a74d4086a",
+        "value": 0,
+        "data": "0x095ea7b3000000000000000000000000c92e8bdf79f0507f65a392b0ab4667716bfe011000000000000000000000000000000000000000000000000000000001cf84779d",
+        "operation": "CALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 120
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xe2eed4938d2fd005cb8744011031041eb5349536",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.4"
+      },
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      },
+      {
+        "sentinel": "0x6d081448c04d9ef7cf8ecf54207b1931ecc25312",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.4"
+      }
+    ],
+    "arbitration": {
+      "frozenBlock": 48416066,
+      "deadline": 48466466,
+      "outcome": "secure",
+      "slashed": 16000000000000000000,
+      "context": "Setting a reasonable allowance to a CoW Swap related contract",
+      "record": {
+        "block": 48416116,
+        "txHash": "0x64e0ad79507adcdab52604544e426b07b200c2ed173bd2ade311e6bf349e0f9b"
+      }
+    }
+  },
+  {
+    "id": "0xdcc1fd09f0f6e226179f2bbaa852d45f1df3dbf5f18916b100165511e8888eed",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "TIMED_OUT",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48403575,
+      "revealDeadline": 48403581
+    },
+    "fee": 0,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48403569,
+      "time": "2026-09-23T20:13:05Z",
+      "txHash": "0xdb88764e366c7efe7e0b63ea718fd5f0e4441d536d185da24faaa16c9308de6a",
+      "epoch": 161345,
+      "oracleData": "0x",
+      "safeTxHash": "0x0eb4f852eb5c6b79717b3ac864e337a0c31a469c4d646420bcc83e10b536a8f9",
+      "transaction": {
+        "chainId": 1,
+        "safe": "0xa76518e62a8d7ff057ec3c46d306b63c1300dd1b",
+        "to": "0x6439e7abd8bb915a5263094784c5cf561c4172ac",
+        "value": 0,
+        "data": "0xed007fc6",
+        "operation": "DELEGATECALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 3
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0x6d081448c04d9ef7cf8ecf54207b1931ecc25312",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.2"
+      },
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      }
+    ],
+    "arbitration": {
+      "frozenBlock": 48403580,
+      "deadline": 48453980,
+      "outcome": "out-of-scope",
+      "context": "Test",
+      "record": {
+        "block": 48403763,
+        "txHash": "0x730887f2719aaf7096bdb811e1f76ac18ee272209b93f74119146aa3b32db14e"
+      }
+    }
+  },
+  {
+    "id": "0x9638bb644c8626d39168db94daca90cfb2908e174c5fb6284adfbdd547812945",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "TIMED_OUT",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48358116,
+      "revealDeadline": 48358122
+    },
+    "fee": 0,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48358110,
+      "time": "2026-09-21T03:46:50Z",
+      "txHash": "0x5f7327d2a5b1c3b0f4eb240cd1eb038f7a1d2fe08547b12b0ef547cf463057ac",
+      "epoch": 161193,
+      "oracleData": "0x",
+      "safeTxHash": "0x06708f49c5d9464a3e2648f7eaa16cc20da97e256d20e4d2301d26ff08cbde0c",
+      "transaction": {
+        "chainId": 1,
+        "safe": "0xfcc83b338ba980f501e51110c7f51791a21d4a28",
+        "to": "0x9d4e4b26a5e2e6dad30c5d95f5ce78a8310f04c2",
+        "value": 0,
+        "data": "0x389f87ff000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000034fa7c06260dc0000000000000000000000000000c98b5ef1ab3587e2c53013c822252578b9a056e20000000000000000000000002f39d218133afab8f2b819b1066c7e434ad94e9e",
+        "operation": "DELEGATECALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x25aa0f9a42ee4ea2dc7f3c9ff02f558dcb0445a3",
+        "nonce": 46
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xe2eed4938d2fd005cb8744011031041eb5349536",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.2"
+      },
+      {
+        "sentinel": "0x6d081448c04d9ef7cf8ecf54207b1931ecc25312",
+        "bond": 800000000000000000000,
+        "vote": "DENIED",
+        "reason": "R-4.2"
+      },
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      }
+    ],
+    "arbitration": {
+      "frozenBlock": 48358119,
+      "deadline": 48408519,
+      "outcome": "timed-out",
+      "record": {
+        "block": 48408700,
+        "txHash": "0x893f10e05823ebfac7d1dbc2ebef6d456a80eb80166313535e521ac26ea2c12f"
+      }
+    }
+  },
+  {
+    "id": "0x6873954d892a95127ddca0f8972902134b0d509e1d40190854b9ba3b1e7e8fda",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "RESOLVED_APPROVED",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48428197,
+      "revealDeadline": 48428203
+    },
+    "fee": 360000000000000000,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48428191,
+      "time": "2026-09-25T07:56:35Z",
+      "txHash": "0x8efc7732c38e7e4780612ec5ba08098b2dba3f0a7866486f1301c76fb07fe690",
+      "epoch": 161427,
+      "oracleData": "0x",
+      "safeTxHash": "0xf51b322344f0f10143da7f4d1c16584ae46be6f28d0da298d034520df66433da",
+      "transaction": {
+        "chainId": 1,
+        "safe": "0x627565217a3a528b02e4940e3e619f0af8123c9a",
+        "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "value": 0,
+        "data": "0xa9059cbb0000000000000000000000005901d51aa93a50dcfe61cf0658fa5b4e51e258f8000000000000000000000000000000000000000000000000000000000e4e1c00",
+        "operation": "CALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 1761
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "APPROVED",
+        "reason": ""
+      }
+    ],
+    "arbitration": null
+  },
+  {
+    "id": "0xbf8a51ff22a488e078e455e1a7579f5112b14b54cc4ca1cb7bed6efa6e8ede38",
+    "oracle": "0x544f12bad6ff72564abbc7ea6494a2a4bdd0ddd0",
+    "charter": "charter.safenet-gov.eth",
+    "state": "TIMED_OUT",
+    "terms": {
+      "sponsor": "0x1ff07880982708b139c8efb87f4f43d15f312127",
+      "bond": 800000000000000000000,
+      "slashAmount": 8000000000000000000,
+      "daoFeeShare": 10000,
+      "commitDeadline": 48332254,
+      "revealDeadline": 48332260
+    },
+    "fee": 0,
+    "proposal": {
+      "consensus": "0x98810887769db19a0df9bf2f44e4998856fcb390",
+      "block": 48332248,
+      "time": "2026-09-19T15:10:25Z",
+      "txHash": "0x16793ae9588e9a8dea220153a871dcce276ebc64f3f1a78722c7bf16417b5c91",
+      "epoch": 161107,
+      "oracleData": "0x",
+      "safeTxHash": "0x75e3729ff08bf9e1bd2c9d364ef2e2c02cac851c8c328ea68dd91f958e397eba",
+      "transaction": {
+        "chainId": 100,
+        "safe": "0xf5fecb12cd783920d0ea71def523848fbc3ef972",
+        "to": "0xa238cbeb142c10ef7ad8442c6d1f9e89e07e7761",
+        "value": 10000000000000000,
+        "data": "0x8d80ff0a000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000001f200e91d153e0b41518a2ce8dd3d7944fa863463a97d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000242e1a7d4d000000000000000000000000000000000000000000000000002386f26fc1000000735faab1c4ec41128c367afb5c3bac73509f70bb000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000000000000000000000000000000000000000000124f6938b0900000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000002386f26fc10000ba699a34be8fe0e7725e93dcbce1701b0211a8ca61330aaeb8a05bf2ec7abed1000000000000000000000000818df8dcd43d716a7263798c99a2fc8e27010711000000000000000000000000000000000000000000000000000000000000012c0000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000002081d53e8ee21dcf9cdbc15bd7f623c69f526d77ec6541f801ad59191822dffe9f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "operation": "DELEGATECALL",
+        "safeTxGas": 0,
+        "baseGas": 0,
+        "gasPrice": 0,
+        "gasToken": "0x0000000000000000000000000000000000000000",
+        "refundReceiver": "0x0000000000000000000000000000000000000000",
+        "nonce": 48651
+      }
+    },
+    "votes": [
+      {
+        "sentinel": "0xc84a0928632382e75c543acced101b9525027362",
+        "bond": 800000000000000000000,
+        "vote": "PENDING",
+        "reason": ""
+      }
+    ],
+    "arbitration": null
+  }
+]
