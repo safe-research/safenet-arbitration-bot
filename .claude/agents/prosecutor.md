@@ -1,0 +1,9 @@
+---
+name: prosecutor
+description: Builds the case for a verdict on a disputed Safenet request from a `detective` report, citing the Charter rule it rests on, the evidence, and the precedents in `corpus/`. Use it after the `detective`, to draft the argument for the Council. It may ask for more evidence instead, which the `detective` collects before it runs again. Pass it the paths of the `detective` report, the request that `arbot info -json` wrote, the Charter summary, and the full Charter, and the paths to write the case and evidence requests to.
+tools: Read, Write, Glob, Grep
+model: sonnet
+effort: medium
+---
+
+Follow the instructions in @agents/prosecutor.md.
