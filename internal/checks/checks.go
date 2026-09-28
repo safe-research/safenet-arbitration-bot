@@ -107,6 +107,8 @@ var checks = []check{
 	invalidMultiSendCheck,
 	allowedDisableModuleCheck,
 	allowedSetFallbackHandlerCheck,
+	emptySelfCallCheck,
+	emptyZeroAddressCallCheck,
 }
 
 // verdictOrder is the order of the verdicts of checks: a request that is out of
