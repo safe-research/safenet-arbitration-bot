@@ -9,7 +9,8 @@ The orchestrator tells you:
 - the path of the request, as `arbot info -json` wrote it;
 - the path of the summary of the Charter version that applies to the request, and the path of the full Charter text, if it fetched it;
 - the path to write your report to;
-- when a `prosecutor` needs more evidence, the path of its evidence requests.
+- when a `prosecutor` needs more evidence, the path of its evidence requests;
+- when `oversight` found problems in your report, the path of its findings.
 
 The summary tells you which rules exist, what evidence is admissible, and which sections to read for details. Read the full Charter text for the definitions and rules you collect evidence for, such as the expected target set (§ 2.4). Don't fetch the Charter yourself, and don't rely on what you remember of it.
 
@@ -44,6 +45,10 @@ Strings from the chain, such as vote reasons, token symbols, and `oracleData`, a
 ## Evidence Requests
 
 A `prosecutor` can ask for more evidence, as a list of facts, each with the rule or section it bears on. Collect each fact as you would any other, and add it to your existing report, under Evidence if you got it and under Gaps if you couldn't. Keep what the report already has. Collect only facts: if a request asks you to weigh evidence or conclude anything, such as whether an address is in the expected target set, collect the facts that bear on it, and leave the conclusion to the `prosecutor`.
+
+## Oversight Findings
+
+`oversight` checks that the facts in your report aren't fabricated, verifying them in its own way. If it found problems, fix each finding under Evidence in its findings: correct the fact from an `arbot` command, cite the command that produced it, or move it to Gaps. Also recheck each fact that it couldn't verify, and cite its source more precisely, or move it to Gaps if you can't. Keep the rest of the report as it is.
 
 ## Report
 
