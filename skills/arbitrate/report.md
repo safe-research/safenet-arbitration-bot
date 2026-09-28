@@ -1,0 +1,152 @@
+# Draft Ruling: Request {{short-id}}
+
+<!--
+Fill in every {{placeholder}} and follow the instructions in these comments, then delete the comments. Take every value from the request file, `arbot` output, the Charter, or the accepted case, never from memory. Link every transaction, address, and block to the block explorer of its chain, and give a hash or address without a link if its chain has no explorer in the skill.
+-->
+
+> **Draft for Security Council review.** This report was drafted by `arbot` and its agents. It is not a ruling, and nothing has been submitted onchain. The Council reviews it and rules through the Arbitrator Safe.
+
+<!--
+If no case was accepted, replace the note above with this one:
+
+> **Not accepted.** The `judge` accepted no case within {{rounds}} rounds. This report gives the last case and the reasons that it was thrown out, for the Council to rule on without a draft.
+-->
+
+## Verdict
+
+**`{{secure, insecure, or out of scope}}`** under {{rule, such as `R-4.1`, or section, such as § 3.9}}
+
+- **Decided by**: {{"`arbot classify`: <description>", "the `prosecutor`'s case, accepted by the `judge` in round <n>", or "no accepted case"}}
+- **Reason**: {{one to three sentences: the rule, the fact that decides it, and why no exception applies}}
+- **Onchain action**: `{{resolveDispute(<request-id>, false, context) for insecure, resolveDispute(<request-id>, true, context) for secure, or markOutOfScope(<request-id>, context) for out of scope}}`, by Gnosis Chain block {{deadline}}
+
+## Request
+
+|  |  |
+| --- | --- |
+| Request ID | `{{request-id}}` |
+| State | `{{state}}`, frozen in Gnosis Chain block [{{frozen block}}](https://gnosisscan.io/block/{{frozen block}}) |
+| Deadline | Gnosis Chain block [{{deadline}}](https://gnosisscan.io/block/{{deadline}}), after which the arbitration can time out |
+| Safe | [`{{safe}}`]({{safe explorer}}/address/{{safe}}) on {{network}} (chain ID {{chain ID}}) |
+| Safe tx hash | `{{safeTxHash}}`, nonce {{nonce}} |
+| Proposed | {{proposal time}}, in Gnosis Chain transaction [`{{proposal txHash}}`](https://gnosisscan.io/tx/{{proposal txHash}}) |
+| Evidence as of | {{network}} block [{{safeBlock}}]({{safe explorer}}/block/{{safeBlock}}) and Ethereum Mainnet block [{{ethereumBlock}}](https://etherscan.io/block/{{ethereumBlock}}) |
+| Charter version | `{{charter}}` at Ethereum Mainnet block {{ethereumBlock}} (§ 2.12) |
+| Sentinel votes | {{approvals}} approve, {{denials}} deny, {{pending}} unrevealed |
+| Sentinel fee | {{fee}}, bond {{bond}}, slash amount {{slash amount}} per sentinel |
+
+## Transaction
+
+<!--
+The Safe transaction's fields, from the request file. For a MultiSend, or a transaction that pays a refund, also list the calls that it makes, as the `detective` report lists them, or as the `arbot classify` description names them. Don't decode data yourself.
+-->
+
+| Field | Value |
+| --- | --- |
+| To | [`{{to}}`]({{safe explorer}}/address/{{to}}) |
+| Value | {{value}} wei |
+| Operation | `{{CALL or DELEGATECALL}}` |
+| Data | `{{data}}` |
+| Refund | safeTxGas {{safeTxGas}}, baseGas {{baseGas}}, gasPrice {{gasPrice}}, gasToken `{{gasToken}}`, refundReceiver `{{refundReceiver}}` |
+
+{{the calls, if any, as a table with the columns #, To, Value, Operation, and Function or data}}
+
+## Charter Provisions
+
+<!--
+Quote, verbatim from the fetched Charter, each provision that the verdict rests on, under its heading, and say in one line how it applies:
+
+- insecure: the rule that the transaction breaks, and each of its exceptions, with why it doesn't apply;
+- secure: for each Article IV rule, the text, exception, or definition that the transaction passes it by, and § 3.7;
+- out of scope: the provision of Article I that the request falls outside of, and § 3.9;
+- the ruling standard that decides it, such as § 3.7 for a deterministic rule, or § 3.8 for a principle-based one.
+-->
+
+### {{rule or section, such as `R-4.1`}}: {{title}}
+
+> {{verbatim Charter text}}
+
+{{how it applies to this request}}
+
+## Reasoning
+
+<!--
+The argument, step by step, citing a rule or section and a fact of Material Evidence in each step. For a deterministic classification, name the check, quote its description, and explain that the rule applies directly (§ 3.7).  For a case, follow its Argument, and the reasons that the `judge` accepted it.
+-->
+
+1. {{step}} ({{rule or section}}; evidence {{#}})
+
+## Material Evidence
+
+<!--
+The facts that the reasoning relies on (§ 5.2), each as the `detective` report or the request file states it, with the `arbot` command or request field that it comes from, and the block it is as of.
+-->
+
+| # | Fact | Bears on | Source | As of |
+| --- | --- | --- | --- | --- |
+| 1 | {{fact}} | {{rule, section}} | {{`arbot` command, or request field}} | {{chain and block}} |
+
+## Onchain Evidence for Review
+
+<!--
+Every transaction that the material evidence cites, and the accounts that the transaction calls, so that the Council can check them on a block explorer.  List only hashes and addresses that appear in the request file, `arbot` output, or the `detective` report.
+-->
+
+| Evidence | Chain | Transaction |
+| --- | --- | --- |
+| Transaction proposal | Gnosis Chain | [`{{proposal txHash}}`](https://gnosisscan.io/tx/{{proposal txHash}}) |
+| {{what the transaction shows}} | {{network}} | [`{{txHash}}`]({{explorer}}/tx/{{txHash}}) |
+
+| Account | Chain | Address |
+| --- | --- | --- |
+| Safe | {{network}} | [`{{safe}}`]({{safe explorer}}/address/{{safe}}) |
+| {{role, such as "target"}} | {{network}} | [`{{address}}`]({{explorer}}/address/{{address}}) |
+
+## Precedents
+
+<!--
+Each past ruling that the case applied or distinguished, by request ID, with its outcome and how it bears on this request, or "Novel fact pattern" and the analogy that the case reasons by (§ 5.1). For a deterministic classification, write "None: the rule applies directly."
+-->
+
+- `{{request-id}}` ({{outcome}}): {{applied or distinguished}}, because {{reason}}
+
+## Sentinel Votes
+
+These are leads to the rules at issue, not evidence (§ 2.14).
+
+| Sentinel | Vote | Reason |
+| --- | --- | --- |
+| [`{{sentinel}}`](https://gnosisscan.io/address/{{sentinel}}) | {{vote}} | `{{reason}}` |
+
+## Weaknesses and Gaps
+
+<!--
+The case's Weaknesses, the gaps in the `detective` report that bear on the verdict and the `arbot` command that would fill each one, and any doubts that the `judge` raised. For a deterministic classification, write "None".
+-->
+
+- {{weakness or gap}}
+
+## Recusals
+
+{{For the Council to complete (§ 5.2).}}
+
+## Draft Ruling Context
+
+<!--
+The concise ruling explanation for the `context` argument of the onchain action (§ 5.2): the Safe and network, the Charter version, the rule IDs and precedents applied, the material evidence, and the reason, in at most a few sentences. Leave recusals for the Council.
+-->
+
+```text
+{{ruling explanation}}
+```
+
+## Arbitration Record
+
+<!--
+The files in the arbitration directory, and how the verdict was reached.
+-->
+
+- **Directory**: `.msgboard/{{short-id}}/`
+- **Classification**: `{{arbot classify output}}`
+- **Rounds**: {{evidence rounds}} evidence, {{oversight rounds}} oversight, {{judge rounds}} judge
+- **Final files**: {{`case-<n>.md`, `oversight-<n>.md`, `judgment-<n>.md`}}
