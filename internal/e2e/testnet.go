@@ -81,6 +81,31 @@ func NewTestnet(tb testing.TB) *Testnet {
 	return n
 }
 
+// InstallFeeToken installs the fee token, WETH9, on node, which is Mainnet or
+// another node that doesn't have the artifacts, at the same address as on
+// Gnosis Chain.
+func (n *Testnet) InstallFeeToken(node *Anvil) {
+	n.tb.Helper()
+	token := n.Artifacts.FeeToken
+	account := n.Artifacts.Accounts[token]
+	node.rpc(nil, "anvil_setCode", token, account.Code)
+	for slot, value := range account.Storage {
+		node.rpc(nil, "anvil_setStorageAt", token, slot, value)
+	}
+}
+
+// TransferFeeToken has from wrap amount of ether in the fee token, then
+// transfer it to to, on node, each in its own block, and returns the receipt of
+// the transfer. The account gets the ether for it, and for gas.
+func (n *Testnet) TransferFeeToken(node *Anvil, from, to ethrpc.Address, amount *big.Int) *Receipt {
+	n.tb.Helper()
+	ether := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	node.SetBalance(from, new(big.Int).Add(amount, ether))
+	token := n.Artifacts.FeeToken
+	node.Receipt(node.Send(from, token, calldata("deposit()"), amount))
+	return node.Transact(from, token, calldata("transfer(address,uint256)", to, amount))
+}
+
 // Arbot returns an Arbot configured to read both nodes. It first mines Mainnet
 // blocks up to the time of the latest Gnosis Chain block, so that arbot finds
 // the Mainnet block before each proposal.
