@@ -31,7 +31,7 @@ If no case was accepted, replace the note above with this one:
 | Safe tx hash | `{{safeTxHash}}`, nonce {{nonce}} |
 | Proposed | {{proposal time}}, in Gnosis Chain transaction [`{{proposal txHash}}`](https://gnosisscan.io/tx/{{proposal txHash}}) |
 | Evidence as of | {{network}} block [{{safeBlock}}]({{safe explorer}}/block/{{safeBlock}}) and Ethereum Mainnet block [{{ethereumBlock}}](https://etherscan.io/block/{{ethereumBlock}}) |
-| Charter version | `{{charter}}` at Ethereum Mainnet block {{ethereumBlock}} (§ 2.12) |
+| Charter version | `{{Charter CID}}`, referenced by `{{charter}}` at Ethereum Mainnet block {{ethereumBlock}} (§ 2.12) |
 | Sentinel votes | {{approvals}} approve, {{denials}} deny, {{pending}} unrevealed |
 | Sentinel fee | {{fee}}, bond {{bond}}, slash amount {{slash amount}} per sentinel |
 
