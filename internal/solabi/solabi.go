@@ -46,6 +46,7 @@ type Tuple []any
 //   - uint64s and *big.Ints are uint256, which covers every smaller unsigned
 //     integer type as well.
 //   - []bytes are bytes, and strings are strings.
+//   - []ethrpc.Addresses are arrays of addresses.
 //   - Tuples are tuples.
 //
 // It panics for other types, and for *big.Ints that aren't uint256s.
@@ -66,7 +67,7 @@ func Encode(values ...any) []byte {
 // isDynamic reports whether value is encoded after the head of its tuple.
 func isDynamic(value any) bool {
 	switch value := value.(type) {
-	case []byte, ethrpc.Bytes, string:
+	case []byte, ethrpc.Bytes, string, []ethrpc.Address:
 		return true
 	case Tuple:
 		return slices.ContainsFunc(value, isDynamic)
@@ -100,6 +101,14 @@ func encode(value any) []byte {
 		return encode([]byte(value))
 	case string:
 		return encode([]byte(value))
+	case []ethrpc.Address:
+		encoded := Uint64(uint64(len(value)))
+		result := encoded[:]
+		for _, address := range value {
+			word := Address(address)
+			result = append(result, word[:]...)
+		}
+		return result
 	case Tuple:
 		return Encode(value...)
 	default:

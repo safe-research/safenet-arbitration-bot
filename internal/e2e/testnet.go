@@ -64,6 +64,9 @@ func NewTestnet(tb testing.TB) *Testnet {
 	for _, n := range []*Anvil{mainnet, node} {
 		n.rpc(nil, "anvil_setCode", safe, safeProxy)
 		n.rpc(nil, "anvil_setStorageAt", safe, ethrpc.Hash{}, slot0)
+		for _, s := range []ethrpc.Address{a.SafeSingleton, a.SafeL2Singleton} {
+			n.rpc(nil, "anvil_setCode", s, a.Accounts[s].Code)
+		}
 	}
 	n := &Testnet{Anvil: node, Mainnet: mainnet, Artifacts: a, Sponsor: ethrpc.Address{0: 0x5f, 19: 1}}
 	n.ArbitrationTimeout = n.callUint64("ARBITRATION_TIMEOUT()")
@@ -104,6 +107,65 @@ func (n *Testnet) TransferFeeToken(node *Anvil, from, to ethrpc.Address, amount 
 	token := n.Artifacts.FeeToken
 	node.Receipt(node.Send(from, token, calldata("deposit()"), amount))
 	return node.Transact(from, token, calldata("transfer(address,uint256)", to, amount))
+}
+
+// SetupSafe makes the account at safe on node a Safe with the owners, a
+// threshold of one, and no modules or fallback handler, which delegates to
+// singleton, one of the Safe singletons in the artifacts. The account gets the
+// code of a SafeProxy, and is set up in a transaction of the first owner.
+func (n *Testnet) SetupSafe(node *Anvil, safe, singleton ethrpc.Address, owners ...ethrpc.Address) {
+	n.tb.Helper()
+	var slot0 ethrpc.Hash
+	copy(slot0[12:], singleton[:])
+	node.rpc(nil, "anvil_setCode", safe, safeProxy)
+	node.rpc(nil, "anvil_setStorageAt", safe, ethrpc.Hash{}, slot0)
+	node.Transact(owners[0], safe, calldata(
+		"setup(address[],uint256,address,bytes,address,address,uint256,address)",
+		owners, uint64(1), ethrpc.Address{}, []byte{}, ethrpc.Address{}, ethrpc.Address{}, uint64(0), ethrpc.Address{},
+	))
+}
+
+// InstallForwarder installs at forwarder a contract that calls target with the
+// calldata that it gets, and reverts if the call does, so that gas estimates
+// for it cover the call. A forwarder that is a Safe's owner can execute its
+// transactions for others.
+func (n *Testnet) InstallForwarder(node *Anvil, forwarder, target ethrpc.Address) {
+	n.tb.Helper()
+	// CALLDATACOPY(0, 0, size), then CALL(gas, target, 0, 0, size, 0, 0), then STOP
+	// if it succeeded, and REVERT(0, 0) if not.
+	code := append([]byte{0x36, 0x60, 0x00, 0x60, 0x00, 0x37, 0x60, 0x00, 0x60, 0x00, 0x36, 0x60, 0x00, 0x60, 0x00, 0x73}, target[:]...)
+	code = append(code, 0x5a, 0xf1, 0x15, 0x60, 0x2b, 0x57, 0x00, 0x5b, 0x60, 0x00, 0x60, 0x00, 0xfd)
+	node.rpc(nil, "anvil_setCode", forwarder, ethrpc.Bytes(code))
+}
+
+// SafeNonce returns the nonce of the Safe at the latest block of node.
+func (n *Testnet) SafeNonce(node *Anvil, safe ethrpc.Address) *big.Int {
+	n.tb.Helper()
+	result, err := node.Call(n.tb.Context(), ethrpc.CallRequest{To: safe, Data: calldata("nonce()")}, node.blockNumber())
+	if err != nil {
+		n.tb.Fatalf("nonce() of %s: %v", safe, err)
+	}
+	d := solabi.NewDecoder(result)
+	nonce := d.Uint(0)
+	if err := d.Err(); err != nil {
+		n.tb.Fatalf("nonce() of %s: %v", safe, err)
+	}
+	return nonce
+}
+
+// ExecCalldata returns the calldata of a call to execTransaction on the Safe
+// that executes tx, which must be for a Safe with a threshold of one and the
+// caller as an owner. The call is signed by the owner with an approved-hash
+// signature, which is valid when the owner is the caller. Its nonce is that of
+// the Safe when the call is mined, not tx's.
+func (n *Testnet) ExecCalldata(tx *safenet.SafeTransaction, owner ethrpc.Address) ethrpc.Bytes {
+	signature := make([]byte, 65)
+	copy(signature[12:], owner[:])
+	signature[64] = 1
+	return calldata(
+		"execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
+		tx.To, tx.Value, []byte(tx.Data), uint64(tx.Operation), tx.SafeTxGas, tx.BaseGas, tx.GasPrice, tx.GasToken, tx.RefundReceiver, signature,
+	)
 }
 
 // Arbot returns an Arbot configured to read both nodes. It first mines Mainnet

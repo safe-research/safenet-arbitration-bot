@@ -26,6 +26,11 @@ type Config struct {
 	// IPFS is the base URL of the IPFS HTTP gateway to use, such as
 	// "https://ipfs.filebase.io". If empty, a public gateway is used.
 	IPFS string `json:"ipfs"`
+	// TxServices maps chain IDs to the base URLs of the Safe Transaction Service to
+	// use for them, such as {"1": "https://api.safe.global/tx-service/eth"}. Chains
+	// without an entry use the public service for the chain, if it has one. An
+	// empty URL leaves the service out.
+	TxServices map[uint64]string `json:"txServices"`
 	// Consensus is the address of the Consensus contract on Gnosis Chain that the
 	// oracle's transaction proposals come from. If zero, the default deployment is
 	// used.

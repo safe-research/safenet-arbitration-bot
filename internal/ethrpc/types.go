@@ -193,6 +193,16 @@ type Log struct {
 	Removed bool `json:"removed"`
 }
 
+// Transaction is a transaction, as returned by eth_getTransactionByHash. Only
+// the fields that the client uses are decoded.
+type Transaction struct {
+	Hash Hash    `json:"hash"`
+	From Address `json:"from"`
+	// To is nil for a transaction that creates a contract.
+	To    *Address `json:"to"`
+	Input Bytes    `json:"input"`
+}
+
 // Block is a block header, as returned by eth_getBlockByNumber. Only the fields
 // that the client uses are decoded.
 type Block struct {

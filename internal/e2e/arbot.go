@@ -21,10 +21,14 @@ type Arbot struct {
 func NewArbot(tb testing.TB, nodes ...*Anvil) *Arbot {
 	tb.Helper()
 	rpcs := make(map[uint64]string)
+	// The tests never use the public Safe Transaction Services, so the Safe
+	// Transaction Service is left out.
+	services := make(map[uint64]string)
 	for _, node := range nodes {
 		rpcs[node.ChainID()] = node.URL
+		services[node.ChainID()] = ""
 	}
-	data, err := json.Marshal(map[string]any{"rpcs": rpcs})
+	data, err := json.Marshal(map[string]any{"rpcs": rpcs, "txServices": services})
 	if err != nil {
 		tb.Fatal(err)
 	}

@@ -13,6 +13,8 @@
 //     are part of their code.
 //   - WETH9 from Ethereum Mainnet, at the address of the oracle's fee token, so
 //     that anyone can mint fee tokens by depositing ether.
+//   - The Safe 1.3.0 and SafeL2 1.3.0 singletons from Ethereum Mainnet, at their
+//     deterministic addresses, so that Safes on anvil run the real contracts.
 //
 // Contracts start out with empty storage on anvil, so it also writes the
 // storage they need to work. It sets fixed values rather than copying the
@@ -53,6 +55,12 @@ var progname = filepath.Base(os.Args[0])
 // weth9 is the address of WETH9 on Ethereum Mainnet.
 var weth9 = ethrpc.MustParseAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
 
+// The Safe 1.3.0 singletons, at their addresses on every chain.
+var (
+	safeSingleton   = ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552")
+	safeL2Singleton = ethrpc.MustParseAddress("0x3E5c63644E683549055b9Be8653de26E0B4CD36E")
+)
+
 // The Consensus epoch and coordinator group that the artifacts set up. Group
 // IDs have their low 64 bits clear, as signature IDs keep the sequence there.
 const epoch = 42
@@ -89,14 +97,18 @@ var (
 // Artifacts are the accounts to install on anvil, and the addresses that the
 // end-to-end tests need.
 type Artifacts struct {
-	Oracle      ethrpc.Address   `json:"oracle"`
-	Consensus   ethrpc.Address   `json:"consensus"`
-	Coordinator ethrpc.Address   `json:"coordinator"`
-	FeeToken    ethrpc.Address   `json:"feeToken"`
-	Arbitrator  ethrpc.Address   `json:"arbitrator"`
-	Sentinels   []ethrpc.Address `json:"sentinels"`
-	Epoch       uint64           `json:"epoch"`
-	GroupID     ethrpc.Hash      `json:"groupId"`
+	Oracle      ethrpc.Address `json:"oracle"`
+	Consensus   ethrpc.Address `json:"consensus"`
+	Coordinator ethrpc.Address `json:"coordinator"`
+	FeeToken    ethrpc.Address `json:"feeToken"`
+	Arbitrator  ethrpc.Address `json:"arbitrator"`
+	// SafeSingleton and SafeL2Singleton are the Safe 1.3.0 singletons, which have
+	// code but no storage.
+	SafeSingleton   ethrpc.Address   `json:"safeSingleton"`
+	SafeL2Singleton ethrpc.Address   `json:"safeL2Singleton"`
+	Sentinels       []ethrpc.Address `json:"sentinels"`
+	Epoch           uint64           `json:"epoch"`
+	GroupID         ethrpc.Hash      `json:"groupId"`
 
 	Accounts map[ethrpc.Address]*Account `json:"accounts"`
 }
@@ -161,12 +173,14 @@ func fetch(ctx context.Context) (*Artifacts, error) {
 	}
 
 	a := &Artifacts{
-		Oracle:    safenet.DefaultOracle,
-		Consensus: safenet.DefaultConsensus,
-		Sentinels: sentinels,
-		Epoch:     epoch,
-		GroupID:   groupID,
-		Accounts:  make(map[ethrpc.Address]*Account),
+		Oracle:          safenet.DefaultOracle,
+		Consensus:       safenet.DefaultConsensus,
+		SafeSingleton:   safeSingleton,
+		SafeL2Singleton: safeL2Singleton,
+		Sentinels:       sentinels,
+		Epoch:           epoch,
+		GroupID:         groupID,
+		Accounts:        make(map[ethrpc.Address]*Account),
 	}
 	proposer, err := gnosis.callAddress(ctx, a.Oracle, "PROPOSER()")
 	if err != nil {
@@ -241,6 +255,12 @@ func fetch(ctx context.Context) (*Artifacts, error) {
 	token.Storage[slot(1)] = shortString("WETH")
 	token.Storage[slot(2)] = solabi.Uint64(18)
 	a.Accounts[a.FeeToken] = token
+
+	for _, singleton := range []ethrpc.Address{safeSingleton, safeL2Singleton} {
+		if a.Accounts[singleton], err = mainnet.account(ctx, singleton); err != nil {
+			return nil, err
+		}
+	}
 
 	return a, nil
 }

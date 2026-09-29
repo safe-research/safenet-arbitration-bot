@@ -28,13 +28,16 @@ var artifactsJSON []byte
 // Artifacts are the accounts that run the default Safenet deployment on anvil,
 // and the addresses of its contracts and participants.
 type Artifacts struct {
-	Oracle     ethrpc.Address             `json:"oracle"`
-	Consensus  ethrpc.Address             `json:"consensus"`
-	FeeToken   ethrpc.Address             `json:"feeToken"`
-	Arbitrator ethrpc.Address             `json:"arbitrator"`
-	Sentinels  []ethrpc.Address           `json:"sentinels"`
-	Epoch      uint64                     `json:"epoch"`
-	Accounts   map[ethrpc.Address]Account `json:"accounts"`
+	Oracle     ethrpc.Address `json:"oracle"`
+	Consensus  ethrpc.Address `json:"consensus"`
+	FeeToken   ethrpc.Address `json:"feeToken"`
+	Arbitrator ethrpc.Address `json:"arbitrator"`
+	// SafeSingleton and SafeL2Singleton are the Safe 1.3.0 singletons.
+	SafeSingleton   ethrpc.Address             `json:"safeSingleton"`
+	SafeL2Singleton ethrpc.Address             `json:"safeL2Singleton"`
+	Sentinels       []ethrpc.Address           `json:"sentinels"`
+	Epoch           uint64                     `json:"epoch"`
+	Accounts        map[ethrpc.Address]Account `json:"accounts"`
 }
 
 // Account is the code and storage of an account.

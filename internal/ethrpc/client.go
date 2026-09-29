@@ -121,6 +121,19 @@ func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
 	return result, err
 }
 
+// GetTransactionByHash returns the transaction with the given hash
+// (eth_getTransactionByHash).
+func (c *Client) GetTransactionByHash(ctx context.Context, hash Hash) (Transaction, error) {
+	var result *Transaction
+	if err := c.RawRequest(ctx, &result, "eth_getTransactionByHash", hash); err != nil {
+		return Transaction{}, err
+	}
+	if result == nil {
+		return Transaction{}, fmt.Errorf("eth_getTransactionByHash: transaction %s not found", hash)
+	}
+	return *result, nil
+}
+
 // GetBlockByNumber returns the header of the block with the given number
 // (eth_getBlockByNumber).
 func (c *Client) GetBlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {

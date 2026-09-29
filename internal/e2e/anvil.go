@@ -110,6 +110,13 @@ func (a *Anvil) rpc(result any, method string, params ...any) {
 	}
 }
 
+// RPC calls one of anvil's methods with params, and decodes its result into
+// result unless it is nil. It fails the test on error.
+func (a *Anvil) RPC(result any, method string, params ...any) {
+	a.tb.Helper()
+	a.rpc(result, method, params...)
+}
+
 // blockNumber returns the number of the latest block.
 func (a *Anvil) blockNumber() ethrpc.BlockNumber {
 	a.tb.Helper()

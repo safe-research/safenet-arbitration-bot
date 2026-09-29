@@ -9,11 +9,6 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
-// defaultTransferBlocks is how many blocks before the Safe block that transfers
-// scans by default, which is about two weeks on Ethereum Mainnet. Public nodes
-// answer a scan of a long history slowly, so it is bounded.
-const defaultTransferBlocks = 100_000
-
 // transfersReport is the JSON output of `arbot transfers`.
 type transfersReport struct {
 	Safe    ethrpc.Address `json:"safe"`
@@ -42,7 +37,7 @@ func transfers(ctx context.Context, e *env, args []string) error {
 	asJSON := flags.Bool("json", false, "write the transfers as JSON")
 	requestFile := flags.String("request-file", "", "read the Safe, its chain, and the block from the request in the JSON file at `path`, as written by arbot info -json")
 	toFlag := flags.String("to", "", "only list transfers to this `address`")
-	blocks := flags.Uint64("blocks", defaultTransferBlocks, "scan this number of blocks up to the request's Safe block")
+	blocks := flags.Uint64("blocks", defaultScanBlocks, "scan this number of blocks up to the request's Safe block")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "Usage: %s transfers [flags] -request-file <path>\n\n", e.progname)
 		fmt.Fprintf(flags.Output(), "Lists the ERC-20 transfers out of the Safe of a request, from the Safe's chain, as of the request's\n")
@@ -55,12 +50,6 @@ func transfers(ctx context.Context, e *env, args []string) error {
 	if err := parse(flags, args, 0); err != nil {
 		return err
 	}
-	if *requestFile == "" {
-		return usageError("-request-file is required")
-	}
-	if *blocks == 0 {
-		return usageError("-blocks must be at least 1")
-	}
 	var to *ethrpc.Address
 	if *toFlag != "" {
 		address, err := ethrpc.ParseAddress(*toFlag)
@@ -70,26 +59,13 @@ func transfers(ctx context.Context, e *env, args []string) error {
 		to = &address
 	}
 
-	request, err := readRequest(*requestFile)
-	if err != nil {
-		return err
-	}
-	tx := request.Proposal.Transaction
-	// A zero block would scan the chain's first blocks instead of those before the
-	// proposal.
-	if tx.ChainID == nil || !tx.ChainID.IsUint64() || request.Proposal.SafeBlock == 0 {
-		return fmt.Errorf("request in %s has no Safe chain ID or block", *requestFile)
-	}
-	chainID := tx.ChainID.Uint64()
-	eth, err := ethrpc.NewDialer(e.cfg.RPCs)(ctx, chainID)
+	scan, err := openScan(ctx, e, *requestFile, *blocks)
 	if err != nil {
 		return err
 	}
 
-	report := transfersReport{Safe: tx.Safe, ChainID: chainID, To: to}
-	report.ToBlock = request.Proposal.SafeBlock
-	report.FromBlock = report.ToBlock - min(*blocks-1, report.ToBlock)
-	found, err := erc20.TransfersFrom(ctx, eth, tx.Safe, to, ethrpc.BlockNumber(report.FromBlock), ethrpc.BlockNumber(report.ToBlock))
+	report := transfersReport{Safe: scan.Safe, ChainID: scan.ChainID, FromBlock: scan.FromBlock, ToBlock: scan.ToBlock, To: to}
+	found, err := erc20.TransfersFrom(ctx, scan.eth, scan.Safe, to, ethrpc.BlockNumber(scan.FromBlock), ethrpc.BlockNumber(scan.ToBlock))
 	if err != nil {
 		return err
 	}
@@ -101,7 +77,7 @@ func transfers(ctx context.Context, e *env, args []string) error {
 	if *asJSON {
 		return writeJSON(e.stdout, report)
 	}
-	fmt.Fprintf(e.stdout, "ERC-20 transfers from %s on chain %d, in blocks %d to %d", report.Safe, chainID, report.FromBlock, report.ToBlock)
+	fmt.Fprintf(e.stdout, "ERC-20 transfers from %s on chain %d, in blocks %d to %d", report.Safe, report.ChainID, report.FromBlock, report.ToBlock)
 	if to != nil {
 		fmt.Fprintf(e.stdout, ", to %s", to)
 	}
