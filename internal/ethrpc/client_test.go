@@ -298,6 +298,89 @@ func TestGetBlockByNumberNotFound(t *testing.T) {
 	}
 }
 
+func TestGetTransactionByHash(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getTransactionByHash", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
+		`{"result": {
+			"hash": "0x00000000000000000000000000000000000000000000000000000000000000cc",
+			"from": "0x00000000000000000000000000000000000000f1",
+			"to": "0x00000000000000000000000000000000000000f2",
+			"input": "0x1234",
+			"nonce": "0x1"
+		}}`,
+	)
+
+	hash := Hash{31: 0xcc}
+	tx, err := client.GetTransactionByHash(t.Context(), hash)
+	if err != nil {
+		t.Fatalf("GetTransactionByHash: %v", err)
+	}
+	to := Address{19: 0xf2}
+	want := Transaction{Hash: hash, From: Address{19: 0xf1}, To: &to, Input: Bytes{0x12, 0x34}}
+	if !reflect.DeepEqual(tx, want) {
+		t.Errorf("GetTransactionByHash: got %+v, want %+v", tx, want)
+	}
+}
+
+func TestGetTransactionByHashNotFound(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getTransactionByHash", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
+		`{"result": null}`,
+	)
+	if _, err := client.GetTransactionByHash(t.Context(), Hash{31: 0xcc}); err == nil {
+		t.Fatal("GetTransactionByHash: expected an error")
+	}
+}
+
+func TestGetTransactionReceipt(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getTransactionReceipt", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
+		`{"result": {
+			"transactionHash": "0x00000000000000000000000000000000000000000000000000000000000000cc",
+			"blockNumber": "0x2625a00",
+			"status": "0x1",
+			"from": "0x00000000000000000000000000000000000000f1",
+			"to": null,
+			"logs": [{
+				"address": "0x00000000000000000000000000000000000000aa",
+				"topics": ["0x00000000000000000000000000000000000000000000000000000000000000dd"],
+				"data": "0x01",
+				"blockNumber": "0x2625a00",
+				"blockHash": "0x00000000000000000000000000000000000000000000000000000000000000bb",
+				"transactionHash": "0x00000000000000000000000000000000000000000000000000000000000000cc",
+				"logIndex": "0x3"
+			}],
+			"gasUsed": "0x5208"
+		}}`,
+	)
+
+	hash := Hash{31: 0xcc}
+	got, err := client.GetTransactionReceipt(t.Context(), hash)
+	if err != nil {
+		t.Fatalf("GetTransactionReceipt: %v", err)
+	}
+	want := Receipt{
+		TransactionHash: hash, BlockNumber: 40_000_000, Status: 1, From: Address{19: 0xf1},
+		Logs: []Log{{
+			Address: Address{19: 0xaa}, Topics: []Hash{{31: 0xdd}}, Data: Bytes{1}, BlockNumber: 40_000_000,
+			BlockHash: Hash{31: 0xbb}, TransactionHash: hash, LogIndex: 3,
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetTransactionReceipt: got %+v, want %+v", got, want)
+	}
+}
+
+func TestGetTransactionReceiptNotFound(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getTransactionReceipt", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
+		`{"result": null}`,
+	)
+	if _, err := client.GetTransactionReceipt(t.Context(), Hash{31: 0xcc}); err == nil {
+		t.Fatal("GetTransactionReceipt: expected an error")
+	}
+}
+
 // node starts a JSON-RPC server that reports chainID to eth_chainId, and passes
 // every other request to handle. It returns the server's URL and a count of the
 // eth_chainId requests it has served.

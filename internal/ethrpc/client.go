@@ -134,6 +134,19 @@ func (c *Client) GetTransactionByHash(ctx context.Context, hash Hash) (Transacti
 	return *result, nil
 }
 
+// GetTransactionReceipt returns the receipt of the mined transaction with the
+// given hash (eth_getTransactionReceipt).
+func (c *Client) GetTransactionReceipt(ctx context.Context, hash Hash) (Receipt, error) {
+	var result *Receipt
+	if err := c.RawRequest(ctx, &result, "eth_getTransactionReceipt", hash); err != nil {
+		return Receipt{}, err
+	}
+	if result == nil {
+		return Receipt{}, fmt.Errorf("eth_getTransactionReceipt: transaction %s not found", hash)
+	}
+	return *result, nil
+}
+
 // GetBlockByNumber returns the header of the block with the given number
 // (eth_getBlockByNumber).
 func (c *Client) GetBlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {

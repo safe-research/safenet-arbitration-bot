@@ -203,6 +203,19 @@ type Transaction struct {
 	Input Bytes    `json:"input"`
 }
 
+// Receipt is a transaction receipt, as returned by eth_getTransactionReceipt.
+// Only the fields that the client uses are decoded.
+type Receipt struct {
+	TransactionHash Hash        `json:"transactionHash"`
+	BlockNumber     BlockNumber `json:"blockNumber"`
+	// Status is 1 if the transaction succeeded and 0 if it reverted.
+	Status Quantity `json:"status"`
+	From   Address  `json:"from"`
+	// To is nil for a transaction that creates a contract.
+	To   *Address `json:"to"`
+	Logs []Log    `json:"logs"`
+}
+
 // Block is a block header, as returned by eth_getBlockByNumber. Only the fields
 // that the client uses are decoded.
 type Block struct {

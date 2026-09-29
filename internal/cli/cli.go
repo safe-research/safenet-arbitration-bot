@@ -29,6 +29,7 @@ var commands = map[string]struct {
 	description string
 }{
 	"charter":    {charter, "fetch the Safenet Arbitration Charter"},
+	"events":     {eventsCommand, "list the events that a transaction logged, on the Safe's chain of a Safenet request"},
 	"executions": {executionsCommand, "list the Safe transactions that the Safe of a Safenet request executed"},
 	"classify":   {classify, "classify a Safenet request with deterministic Charter checks"},
 	"info":       {info, "show a Safenet request, its proposal, votes, and arbitration"},
