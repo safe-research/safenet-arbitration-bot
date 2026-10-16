@@ -199,7 +199,7 @@ func service(t *testing.T, transactions map[ethrpc.Hash]*safenet.SafeTransaction
 		}
 	}))
 	t.Cleanup(server.Close)
-	return txservice.NewClient(server.URL, ethrpc.Mainnet)
+	return txservice.NewClient(server.URL, ethrpc.Mainnet, "")
 }
 
 func TestFind(t *testing.T) {

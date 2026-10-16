@@ -31,6 +31,10 @@ type Config struct {
 	// without an entry use the public service for the chain, if it has one. An
 	// empty URL leaves the service out.
 	TxServices map[uint64]string `json:"txServices"`
+	// SafeAPIKey is the API key of Safe's API, which has higher rate limits than
+	// using it without one. It is only sent to services on Safe's API, at
+	// https://api.safe.global, such as the default transaction services.
+	SafeAPIKey string `json:"safeApiKey"`
 	// Consensus is the address of the Consensus contract on Gnosis Chain that the
 	// oracle's transaction proposals come from. If zero, the default deployment is
 	// used.

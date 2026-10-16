@@ -23,7 +23,8 @@ import (
 )
 
 // DefaultURLs are the base URLs of Safe's public transaction services, by chain
-// ID, for the networks that the Charter covers. They need no API key.
+// ID, for the networks that the Charter covers. They work without an API key,
+// at a low rate limit, and with Safe's API key at a higher one (see IsSafeAPI).
 var DefaultURLs = map[uint64]string{
 	ethrpc.Mainnet:     "https://api.safe.global/tx-service/eth",
 	ethrpc.ArbitrumOne: "https://api.safe.global/tx-service/arb1",
@@ -37,18 +38,31 @@ const maxResponseSize = 8 << 20
 // ErrNotFound is the error for a transaction that the service doesn't have.
 var ErrNotFound = errors.New("transaction not found")
 
+// safeAPIHost is the host of Safe's API, which its API keys are for.
+const safeAPIHost = "api.safe.global"
+
+// IsSafeAPI reports whether baseURL is a service of Safe's API, such as one of
+// DefaultURLs, which takes Safe's API key. Callers only send the key to these,
+// so that it doesn't leak to other services.
+func IsSafeAPI(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	return err == nil && u.Scheme == "https" && u.Host == safeAPIHost
+}
+
 // Client fetches Safe transactions from a Safe Transaction Service.
 type Client struct {
 	http    *http.Client
 	baseURL string
 	chainID *big.Int
+	apiKey  string
 }
 
 // NewClient returns a client for the service at the base URL baseURL, such as
 // "https://api.safe.global/tx-service/eth", which serves the Safes of the chain
-// with the given ID.
-func NewClient(baseURL string, chainID uint64) *Client {
-	return &Client{http: httpretry.Client, baseURL: baseURL, chainID: new(big.Int).SetUint64(chainID)}
+// with the given ID. If apiKey isn't empty, the client sends it with every
+// request, as a bearer token.
+func NewClient(baseURL string, chainID uint64, apiKey string) *Client {
+	return &Client{http: httpretry.Client, baseURL: baseURL, chainID: new(big.Int).SetUint64(chainID), apiKey: apiKey}
 }
 
 // Transaction returns the Safe transaction that the service has with the Safe
@@ -66,6 +80,9 @@ func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*safe
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

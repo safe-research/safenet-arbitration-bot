@@ -129,6 +129,7 @@ func TestLoadSettings(t *testing.T) {
 		"rpcs": {"1": "https://mainnet.example", "100": "https://gnosis.example"},
 		"ipfs": "https://ipfs.example",
 		"txServices": {"1": "https://tx-service.example/eth"},
+		"safeApiKey": "secret",
 		"consensus": "0x00000000000000000000000000000000000000aa",
 		"oracle": "0x00000000000000000000000000000000000000bb"
 	}`)
@@ -141,10 +142,11 @@ func TestLoadSettings(t *testing.T) {
 		RPCs:       map[uint64]string{1: "https://mainnet.example", 100: "https://gnosis.example"},
 		IPFS:       "https://ipfs.example",
 		TxServices: map[uint64]string{1: "https://tx-service.example/eth"},
+		SafeAPIKey: "secret",
 		Consensus:  ethrpc.Address{19: 0xaa},
 		Oracle:     ethrpc.Address{19: 0xbb},
 	}
-	if !maps.Equal(config.RPCs, want.RPCs) || !maps.Equal(config.TxServices, want.TxServices) || config.IPFS != want.IPFS || config.Oracle != want.Oracle || config.Consensus != want.Consensus {
+	if !maps.Equal(config.RPCs, want.RPCs) || !maps.Equal(config.TxServices, want.TxServices) || config.IPFS != want.IPFS || config.SafeAPIKey != want.SafeAPIKey || config.Oracle != want.Oracle || config.Consensus != want.Consensus {
 		t.Errorf("Load: got %+v, want %+v", config, want)
 	}
 }

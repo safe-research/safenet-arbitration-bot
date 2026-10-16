@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,47 @@ func serve(t *testing.T, status int, body string) *Client {
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
-	return NewClient(server.URL+"/tx-service/eth", ethrpc.Mainnet)
+	return NewClient(server.URL+"/tx-service/eth", ethrpc.Mainnet, "")
+}
+
+func TestTransactionSendsAPIKey(t *testing.T) {
+	for _, key := range []string{"", "secret"} {
+		var got []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Values("Authorization")
+			http.NotFound(w, r)
+		}))
+		t.Cleanup(server.Close)
+
+		NewClient(server.URL, ethrpc.Mainnet, key).Transaction(t.Context(), hash)
+		want := []string{"Bearer " + key}
+		if key == "" {
+			want = nil
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Transaction with API key %q: got Authorization %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestIsSafeAPI(t *testing.T) {
+	for _, url := range DefaultURLs {
+		if !IsSafeAPI(url) {
+			t.Errorf("IsSafeAPI(%q): got false, want true", url)
+		}
+	}
+	for _, url := range []string{
+		"http://api.safe.global/tx-service/eth",
+		"https://api.safe.global.example/tx-service/eth",
+		"https://api.safe.global:8443/tx-service/eth",
+		"https://safe-transaction-mainnet.safe.global",
+		"https://tx-service.example/eth",
+		"",
+	} {
+		if IsSafeAPI(url) {
+			t.Errorf("IsSafeAPI(%q): got true, want false", url)
+		}
+	}
 }
 
 func TestTransaction(t *testing.T) {

@@ -41,7 +41,7 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "  calldata  the calldata of the onchain transaction, if it calls execTransaction on the Safe\n")
 		fmt.Fprintf(out, "  trace     a trace of the onchain transaction, which needs a node with debug_traceTransaction\n")
 		fmt.Fprintf(out, "  service   the Safe Transaction Service (see the txServices setting, where an empty URL leaves it\n")
-		fmt.Fprintf(out, "            out), an offchain source\n\n")
+		fmt.Fprintf(out, "            out, and safeApiKey, for the services on api.safe.global), an offchain source\n\n")
 		fmt.Fprintf(out, "A transaction is only reported if its EIP-712 hash is the one that the Safe logged, whichever the\n")
 		fmt.Fprintf(out, "source. The calldata and traces have no nonce, so it is worked out from the Safe's nonce at the last\n")
 		fmt.Fprintf(out, "block. If no source has the transaction, it is an unknown transaction, or null with -json.\n")
@@ -65,7 +65,11 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		baseURL = txservice.DefaultURLs[scan.ChainID]
 	}
 	if baseURL != "" {
-		finder.Service = txservice.NewClient(baseURL, scan.ChainID)
+		var apiKey string
+		if txservice.IsSafeAPI(baseURL) {
+			apiKey = e.cfg.SafeAPIKey
+		}
+		finder.Service = txservice.NewClient(baseURL, scan.ChainID, apiKey)
 	}
 	found, err := finder.Find(ctx, scan.Safe, ethrpc.BlockNumber(scan.FromBlock), ethrpc.BlockNumber(scan.ToBlock))
 	if err != nil {
