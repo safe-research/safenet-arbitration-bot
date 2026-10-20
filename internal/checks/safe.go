@@ -22,15 +22,33 @@ import (
 // Gnosis Chain was compiled with other metadata, so its proxies differ from
 // those on Ethereum Mainnet. Safes of 1.2.0, which shipped no proxy factory,
 // use the 1.1.1 proxy.
+//
+// Each hash can be checked against one of two sources, given above it. One is
+// the deployedBytecode of the proxy in the build artifacts of the version's npm
+// release, at https://unpkg.com/<package>@<version>/<path>. The other is the
+// proxyRuntimeCode of the version's official proxy factory, as the
+// safe-deployments repository lists it, on the network. The 1.0.0 artifact
+// matches no deployed proxy, nor does the 1.1.1 artifact match the proxies on
+// Gnosis Chain, so those hashes come from the factories only.
 var safeProxyCodeHashes = map[ethrpc.Hash][]uint64{
-	// 1.0.0
+	// 1.0.0: proxyRuntimeCode of the ProxyFactory
+	// 0x12302fE9c02ff50939BaAaaf415fc226C078613C on Ethereum Mainnet and Gnosis
+	// Chain.
 	ethrpc.MustParseHash("0xf8fffcb9b9c73fbc4ffb6dc52f0001fa998951e0d4177894b1b899f7732b6eaf"): {ethrpc.Mainnet, ethrpc.Gnosis},
-	// 1.1.1
+	// 1.1.1: @gnosis.pm/safe-contracts@1.1.1/build/contracts/Proxy.json, and
+	// proxyRuntimeCode of the ProxyFactory
+	// 0x76E2cFc1F5Fa8F6a5b3fC4c8F4788F0116861F9B on Ethereum Mainnet.
 	ethrpc.MustParseHash("0xaea7d4252f6245f301e540cfbee27d3a88de543af8e49c5c62405d5499fab7e5"): {ethrpc.Mainnet},
+	// 1.1.1: proxyRuntimeCode of the same ProxyFactory on Gnosis Chain.
 	ethrpc.MustParseHash("0x30cf24338d14750aab3433d8bb0cedd0e1263ee1f4f5f84cc482f3541ce61ad5"): {ethrpc.Gnosis},
-	// 1.3.0, 1.4.1, and 1.5.0
+	// 1.3.0:
+	// @gnosis.pm/safe-contracts@1.3.0/build/artifacts/contracts/proxies/GnosisSafeProxy.sol/GnosisSafeProxy.json
 	ethrpc.MustParseHash("0xb89c1b3bdf2cf8827818646bce9a8f6e372885f8c55e5c07acbd307cb133b000"): networks,
+	// 1.4.1:
+	// @safe-global/safe-contracts@1.4.1/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json
 	ethrpc.MustParseHash("0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c"): networks,
+	// 1.5.0:
+	// @safe-global/safe-smart-account@1.5.0/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json
 	ethrpc.MustParseHash("0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f"): networks,
 }
 
