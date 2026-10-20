@@ -55,9 +55,12 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	backoff := cmp.Or(t.Delay, DefaultDelay)
 	maxDelay := cmp.Or(t.MaxDelay, DefaultMaxDelay)
 
-	// Sending a request reads its body, so a retry needs a copy of the body from
-	// GetBody, which http.NewRequest only sets for bodies that it can copy, such as
-	// a *bytes.Reader. A request without a body can always be sent again.
+	// Sending a request reads its body to the end, so a retry can only send the
+	// body again with a new copy from GetBody. http.NewRequest sets GetBody for a
+	// body that it can copy, such as a *bytes.Reader, but not for a stream, so a
+	// request with a stream as its body is sent once, and not retried, unless the
+	// caller sets GetBody. A request without a body, such as most GET requests, is
+	// always retried.
 	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
 		return base.RoundTrip(req)
 	}
@@ -78,7 +81,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
-		// The connection can only be reused once the body is read to its end.
+		// The connection can only be reused once the body is read to its end. The body
+		// of a 429 response is usually a short error message, so this reads at most 4
+		// KiB of it. If it is longer, closing it closes the connection, and the retry
+		// opens a new one.
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		timer := time.NewTimer(wait)
