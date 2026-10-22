@@ -57,10 +57,10 @@ type Record struct {
 
 // Fetch looks up the contract at address on the chain with the given ID, whose
 // code is code, in repo, with fields. It returns the contract that repo
-// verified at runtime, or nil if the account has no code or repo hasn't verified
-// it. It fails if Sourcify only matched the creation code, or if the runtime
-// code that repo verified isn't code, such as for a contract that was destroyed
-// and created again since.
+// verified at runtime, or nil if the account has no code or repo hasn't
+// verified it. It fails if Sourcify only matched the creation code, or if the
+// runtime code that repo verified isn't code, such as for a contract that was
+// destroyed and created again since.
 func Fetch(ctx context.Context, repo Repository, chainID uint64, address ethrpc.Address, code ethrpc.Bytes, fields ...Field) (*Lookup, *Contract, error) {
 	lookup := &Lookup{Address: address, CodeHash: keccak256.Hash(code), CodeSize: len(code)}
 	if len(code) == 0 {
