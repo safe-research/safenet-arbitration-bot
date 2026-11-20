@@ -118,17 +118,21 @@ type collector struct {
 	// events are the SafeMultiSigTransaction logs by onchain transaction, whose
 	// hash matches the transaction of the execution that follows.
 	events map[ethrpc.Hash][]*safenet.SafeTransaction
+	// seen are the logs collected, by block and log index, so that a block that is
+	// read again adds nothing.
+	seen map[[2]uint64]bool
 }
 
 func newCollector(f *Finder, safe ethrpc.Address) *collector {
 	return &collector{
 		Finder: f, safe: safe, executions: []Execution{},
-		events: make(map[ethrpc.Hash][]*safenet.SafeTransaction),
+		events: make(map[ethrpc.Hash][]*safenet.SafeTransaction), seen: make(map[[2]uint64]bool),
 	}
 }
 
 // scan collects the executions and events of the Safe in the blocks from to to,
-// including both, and returns the number of execution logs that it read.
+// including both, and returns the number of execution logs that it read, new or
+// not.
 func (c *collector) scan(ctx context.Context, from, to ethrpc.BlockNumber) (int, error) {
 	logs := c.Eth.ScanLogs(ctx, ethrpc.LogFilter{
 		FromBlock: from,
@@ -147,6 +151,11 @@ func (c *collector) scan(ctx context.Context, from, to ethrpc.BlockNumber) (int,
 		if log.Topics[0] != multiSigEvent {
 			read++
 		}
+		key := [2]uint64{uint64(log.BlockNumber), uint64(log.LogIndex)}
+		if c.seen[key] {
+			continue
+		}
+		c.seen[key] = true
 		if log.Topics[0] == multiSigEvent {
 			if tx := c.decodeEvent(c.safe, log.Data); tx != nil {
 				c.events[log.TransactionHash] = append(c.events[log.TransactionHash], tx)

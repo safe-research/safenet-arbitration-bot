@@ -2,7 +2,10 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +19,7 @@ import (
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
+	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
 )
 
 // historyOutput is the JSON output of `arbot executions -all`.
@@ -29,7 +33,9 @@ type historyOutput struct {
 		Nonce         *big.Int                `json:"nonce"`
 		Complete      bool                    `json:"complete"`
 		MissingNonces []executions.NonceRange `json:"missingNonces"`
+		Scanned       []executions.BlockRange `json:"scanned"`
 		Rejected      []executions.Rejected   `json:"rejected"`
+		Creation      *executions.Creation    `json:"creation"`
 	} `json:"history"`
 }
 
@@ -68,7 +74,7 @@ func TestExecutionsAll(t *testing.T) {
 		return x, e2e.TxServiceExecution{Transaction: &tx, SafeTxHash: tx.Hash(), TxHash: receipt.TransactionHash, Block: x.Block}
 	}
 	first, listedFirst := exec("first", "service")
-	exec("unlisted", "calldata")
+	unlisted, _ := exec("unlisted", "calldata")
 	third, listedThird := exec("third", "service")
 	misreported, listedMisreported := exec("misreported", "calldata")
 	// The service reports a transaction that isn't the one executed, with the hash
@@ -99,9 +105,11 @@ func TestExecutionsAll(t *testing.T) {
 	if _, ok := decode[map[string]any](t, out)["fromBlock"]; got.Safe != safe || got.ChainID != ethrpc.Mainnet || ok || h.Service.URL != service.URL || h.Service.ObservedAt.IsZero() {
 		t.Errorf("executions -all: got Safe %s on chain %d, from %q at %s, want %s on chain 1, from the service, without a first block", got.Safe, got.ChainID, h.Service.URL, h.Service.ObservedAt, safe)
 	}
-	// The misreported execution is found in the block that the service names, and
-	// the unlisted one, in a block that it doesn't name, isn't found.
-	if want := []executionJSON{first, third, misreported}; !reflect.DeepEqual(canonical(t, got.Executions), canonical(t, want)) {
+	// The unlisted execution is found by scanning the blocks between the first and
+	// the third, and the misreported one in the block that the service names, but
+	// as its nonce is unknown until it is decoded, the blocks after the third are
+	// scanned too.
+	if want := []executionJSON{first, unlisted, third, misreported}; !reflect.DeepEqual(canonical(t, got.Executions), canonical(t, want)) {
 		g, _ := json.MarshalIndent(got.Executions, "", "  ")
 		w, _ := json.MarshalIndent(want, "", "  ")
 		t.Errorf("executions -all:\ngot  %s\nwant %s", g, w)
@@ -109,9 +117,13 @@ func TestExecutionsAll(t *testing.T) {
 	if len(h.Rejected) != 1 || h.Rejected[0].SafeTxHash != misreported.SafeTxHash {
 		t.Errorf("executions -all: got rejected %+v, want the misreported transaction", h.Rejected)
 	}
-	missing := []executions.NonceRange{{From: 1, To: 1}}
-	if h.Nonce == nil || h.Nonce.Int64() != 4 || h.Complete || !reflect.DeepEqual(h.MissingNonces, missing) {
-		t.Errorf("executions -all: got nonce %v with missing nonces %v, want 4, incomplete, with %v missing", h.Nonce, h.MissingNonces, missing)
+	scanned := []executions.BlockRange{{FromBlock: first.Block, ToBlock: third.Block}, {FromBlock: third.Block, ToBlock: got.ToBlock}}
+	if h.Nonce == nil || h.Nonce.Int64() != 4 || !h.Complete || len(h.MissingNonces) != 0 || !reflect.DeepEqual(h.Scanned, scanned) {
+		t.Errorf("executions -all: got nonce %v with missing nonces %v and blocks %v scanned, want 4, complete, with %v scanned", h.Nonce, h.MissingNonces, h.Scanned, scanned)
+	}
+	// The Safe's account was set up without a transaction, so it has no creation.
+	if h.Creation != nil {
+		t.Errorf("executions -all: got the creation %+v, want none", h.Creation)
 	}
 
 	// The execution of the request's own Safe transaction is marked, here for a
@@ -132,7 +144,7 @@ func TestExecutionsAll(t *testing.T) {
 	own := decode[historyOutput](t, arbot.Run(t, "executions", "-all", "-json", "-request-file", pathThird))
 	ownThird := third
 	ownThird.Proposal = true
-	if !reflect.DeepEqual(canonical(t, own.Executions), canonical(t, []executionJSON{first, ownThird, misreported})) {
+	if !reflect.DeepEqual(canonical(t, own.Executions), canonical(t, []executionJSON{first, unlisted, ownThird, misreported})) || !own.History.Complete {
 		t.Errorf("executions -all of the third: got executions %+v, want the third marked", own.Executions)
 	}
 	ownText := arbot.Run(t, "executions", "-all", "-request-file", pathThird)
@@ -153,12 +165,70 @@ func TestExecutionsAll(t *testing.T) {
 
 	text := arbot.Run(t, "executions", "-all", "-request-file", path)
 	for _, want := range []string{
-		`(?m)^Missing nonces: 1$`,
+		`(?m)^Missing nonces: none$`,
 		`(?m)^\d+ +` + first.TxHash.String() + ` +success +` + first.SafeTxHash.String() + ` +service +0 +` + target.String() + ` +0 +CALL +0x66697273 \(5 bytes\)$`,
 		`(?m)^3 +` + misreported.SafeTxHash.String() + ` +` + misreported.TxHash.String() + ` +the transaction's fields don't hash`,
 	} {
 		if !regexp.MustCompile(want).Match(text) {
 			t.Errorf("executions -all: output has no line matching %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestCreationFromService checks the creation that a Safe Transaction Service
+// names against an anvil node's receipts. Any transaction in the block where
+// the account got its code passes the code check, so the transaction is only
+// kept if its receipt has the account as the contract that it created, and
+// otherwise the creation has its block alone.
+func TestCreationFromService(t *testing.T) {
+	t.Parallel()
+	node := e2e.StartAnvil(t, ethrpc.Mainnet, "--prune-history=50")
+	deployer := ethrpc.Address{0: 0xde, 19: 1}
+	bystander := ethrpc.Address{0: 0xb5, 19: 1}
+	for _, a := range []ethrpc.Address{deployer, bystander} {
+		node.SetBalance(a, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+	}
+	// A contract creation, whose init code returns the code 0x6080, and another
+	// transaction in the same block.
+	node.SetAutomine(false)
+	var created ethrpc.Hash
+	node.RPC(&created, "eth_sendTransaction", map[string]any{"from": deployer, "data": ethrpc.Bytes{0x61, 0x60, 0x80, 0x60, 0x00, 0x52, 0x60, 0x02, 0x60, 0x1e, 0xf3}})
+	other := node.Send(bystander, bystander, nil, nil)
+	node.MinePending()
+	node.SetAutomine(true)
+	node.Mine(1)
+	receipt, err := node.GetTransactionReceipt(t.Context(), created)
+	if err != nil || receipt.ContractAddress == nil {
+		t.Fatalf("receipt of the contract creation: got %+v, %v, want one with the contract", receipt, err)
+	}
+	account, block := *receipt.ContractAddress, receipt.BlockNumber
+
+	for _, test := range []struct {
+		name    string
+		named   ethrpc.Hash
+		want    *ethrpc.Hash
+		warning string
+	}{
+		{"the creation", created, &created, ""},
+		{"another transaction", other, nil, "neither creates the account nor logs a ProxyCreation event of it"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"transactionHash": %q}`, test.named)
+			}))
+			t.Cleanup(service.Close)
+			var warnings []string
+			f := &executions.Finder{
+				Eth: node.Client, Service: txservice.NewClient(service.URL, ethrpc.Mainnet),
+				Warn: func(err error) { warnings = append(warnings, err.Error()) },
+			}
+			got, err := f.CreationFromService(t.Context(), account, block+1)
+			if err != nil || got == nil || got.Block != uint64(block) || !reflect.DeepEqual(got.TxHash, test.want) || got.Factory != nil {
+				t.Errorf("CreationFromService: got %+v, %v, want block %d and transaction %v", got, err, block, test.want)
+			}
+			if test.warning == "" && len(warnings) != 0 || test.warning != "" && (len(warnings) != 1 || !strings.Contains(warnings[0], test.warning)) {
+				t.Errorf("warnings: got %q, want %q", warnings, test.warning)
+			}
+		})
 	}
 }

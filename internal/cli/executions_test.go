@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
 )
 
@@ -116,6 +119,27 @@ func TestNonceRanges(t *testing.T) {
 	} {
 		if got := nonceRanges(test.ranges); got != test.want {
 			t.Errorf("nonceRanges(%v): got %q, want %q", test.ranges, got, test.want)
+		}
+	}
+}
+
+func TestWriteHistoryCreation(t *testing.T) {
+	factory := ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67")
+	tx := ethrpc.Hash{0: 0xaa, 31: 9}
+	for _, test := range []struct {
+		creation *executions.Creation
+		want     string
+	}{
+		{nil, `(?m)^Creation: unknown$`},
+		{&executions.Creation{Block: 80}, `(?m)^Created in block 80, by a transaction that arbot doesn't bind to the account$`},
+		{&executions.Creation{Block: 80, TxHash: &tx}, `(?m)^Created in block 80, transaction ` + tx.String() + ` \(contract creation\)$`},
+		{&executions.Creation{Block: 80, TxHash: &tx, Factory: &factory}, `(?m)^Created in block 80, transaction ` + tx.String() + ` \(ProxyCreation event of ` + factory.String() + `\)$`},
+	} {
+		var stdout bytes.Buffer
+		report := &executionsReport{ChainID: 1, ToBlock: 200, History: &historyReport{Nonce: big.NewInt(0), Creation: test.creation}}
+		writeHistory(&env{stdout: &stdout}, report)
+		if !regexp.MustCompile(test.want).Match(stdout.Bytes()) {
+			t.Errorf("writeHistory: output has no line matching %q:\n%s", test.want, stdout.String())
 		}
 	}
 }
