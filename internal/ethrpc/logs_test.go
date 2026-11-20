@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/httpretry"
 )
 
 // logNode starts a JSON-RPC server that serves eth_getLogs for ranges of at
@@ -14,6 +17,13 @@ import (
 // wider ranges with an HTTP error status and a JSON-RPC error. It records the
 // block ranges it is asked for.
 func logNode(t *testing.T, limit uint64, blocks ...BlockNumber) (*Client, *[][2]BlockNumber) {
+	t.Helper()
+	return limitNode(t, limit, http.StatusBadRequest, -32602, blocks...)
+}
+
+// limitNode is a logNode that rejects wider ranges with the given HTTP status
+// and JSON-RPC error code.
+func limitNode(t *testing.T, limit uint64, status, code int, blocks ...BlockNumber) (*Client, *[][2]BlockNumber) {
 	t.Helper()
 	var ranges [][2]BlockNumber
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +43,11 @@ func logNode(t *testing.T, limit uint64, blocks ...BlockNumber) (*Client, *[][2]
 		filter := req.Params[0]
 		ranges = append(ranges, [2]BlockNumber{filter.FromBlock, filter.ToBlock})
 		if uint64(filter.ToBlock-filter.FromBlock+1) > limit {
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(status)
 			json.NewEncoder(w).Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
-				"error":   map[string]any{"code": -32602, "message": fmt.Sprintf("range exceeds %d blocks", limit)},
+				"error":   map[string]any{"code": code, "message": fmt.Sprintf("range exceeds %d blocks", limit)},
 			})
 			return
 		}
@@ -121,5 +131,43 @@ func TestScanLogsStopsEarly(t *testing.T) {
 	}
 	if len(*ranges) != 1 {
 		t.Errorf("ranges: got %v, want only the first chunk", *ranges)
+	}
+}
+
+func TestScanLogsHalvesRangeOnLimitExceeded(t *testing.T) {
+	fastRateLimitRetries(t)
+	// Some nodes report too many results with -32005 and HTTP status 200, which
+	// RawRequest retries as a rate limit. The error may be about the range, so the
+	// scan halves it once the retries fail.
+	want := []BlockNumber{0, 9_999}
+	client, ranges := limitNode(t, 5_000, http.StatusOK, -32005, want...)
+
+	if got := scan(t, client, LogFilter{FromBlock: 0, ToBlock: 9_999}); !slices.Equal(got, want) {
+		t.Errorf("blocks: got %v, want %v", got, want)
+	}
+	wantRanges := append(slices.Repeat([][2]BlockNumber{{0, 9_999}}, rateLimitRetries+1), [2]BlockNumber{0, 4_999}, [2]BlockNumber{5_000, 9_999})
+	if !slices.Equal(*ranges, wantRanges) {
+		t.Errorf("ranges: got %v, want %v", *ranges, wantRanges)
+	}
+}
+
+func TestScanLogsKeepsRangeOnRateLimit(t *testing.T) {
+	fastRateLimitRetries(t)
+	// A rate limit with HTTP status 429 is not about the range, so the scan fails
+	// with it once httpretry gives up, instead of halving the range down to the
+	// minimum, which only sends more requests.
+	var ranges atomic.Int64
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		ranges.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32005, "message": "Rate limit exceeded"}})
+	})
+	var err error
+	for _, err = range connect(t, url).ScanLogs(t.Context(), LogFilter{FromBlock: 0, ToBlock: 100_000}) {
+		break
+	}
+	if want := httpretry.DefaultRetries + 1; !Transient(err) || ranges.Load() != int64(want) {
+		t.Errorf("ScanLogs: got %v after %d requests, want a transient error after %d requests for one range", err, ranges.Load(), want)
 	}
 }
