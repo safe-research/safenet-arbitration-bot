@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -51,6 +52,13 @@ type chain struct {
 	// resetting are the methods whose responses the node cuts off with a TCP reset,
 	// as an overloaded proxy does.
 	resetting []string
+
+	mu sync.Mutex
+	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
+	// status 500.
+	failingBlocks []uint64
+	// ranges are the block ranges of the eth_getLogs requests, in order.
+	ranges [][2]uint64
 }
 
 // nodeTimeout is Nethermind's error for a request that ran past its time limit.
@@ -102,6 +110,13 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 		case "eth_getLogs":
 			var filter ethrpc.LogFilter
 			json.Unmarshal(req.Params[0], &filter)
+			c.mu.Lock()
+			c.ranges = append(c.ranges, [2]uint64{uint64(filter.FromBlock), uint64(filter.ToBlock)})
+			c.mu.Unlock()
+			if slices.ContainsFunc(c.failingBlocks, func(b uint64) bool { return b >= uint64(filter.FromBlock) && b <= uint64(filter.ToBlock) }) {
+				http.Error(w, "overloaded", http.StatusInternalServerError)
+				return
+			}
 			logs := []ethrpc.Log{}
 			for _, log := range c.logs {
 				if log.BlockNumber >= filter.FromBlock && log.BlockNumber <= filter.ToBlock &&
