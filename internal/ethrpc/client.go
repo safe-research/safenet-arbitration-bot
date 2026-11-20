@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -188,11 +191,109 @@ type response struct {
 	Error  *Error          `json:"error"`
 }
 
+// HTTPError is a response with an HTTP error status, which may have a JSON-RPC
+// error in its body, such as for a rate limit or a block range that is too
+// large.
+type HTTPError struct {
+	Status     string
+	StatusCode int
+	// Err is the JSON-RPC error in the body, or nil if it has none, and Body is the
+	// start of the body otherwise.
+	Err  *Error
+	Body string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("HTTP %s: %v", e.Status, e.Err)
+	}
+	return fmt.Sprintf("HTTP %s: %s", e.Status, e.Body)
+}
+
+func (e *HTTPError) Unwrap() error {
+	if e.Err == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// limitExceeded is the JSON-RPC error code "Limit exceeded" of EIP-1474, which
+// nodes use for rate limits, some with HTTP status 200, where httpretry doesn't
+// see them.
+const limitExceeded = -32005
+
+// rateLimited reports whether err is a JSON-RPC rate limit error.
+func rateLimited(err error) bool {
+	rpcErr, ok := errors.AsType[*Error](err)
+	return ok && rpcErr.Code == limitExceeded
+}
+
+// refused reports whether err is a response with HTTP status 429 or a server
+// error, which rate limits or fails the request rather than answers it.
+func refused(err error) bool {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	return ok && (httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode >= 500)
+}
+
+// Transient reports whether err is a failure to get an answer from the node,
+// such as a rate limit, a server error, or a dropped connection, rather than
+// the node's answer: a JSON-RPC error, a rejected request, or that it doesn't
+// have what was asked for. A request that failed transiently says nothing about
+// the chain, so a caller must not read it as an answer, such as "no receipt" or
+// "no trace", and it can be tried again later.
+func Transient(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if refused(err) {
+		return true
+	}
+	if _, ok := errors.AsType[*Error](err); ok {
+		return rateLimited(err)
+	}
+	// A failure to connect, a connection dropped while reading the response, or a
+	// timeout. Other errors aren't about the node, such as a request that couldn't
+	// be encoded, or a missing file, whose syscall.Errno is a net.Error too.
+	_, connecting := errors.AsType[*url.Error](err)
+	_, reading := errors.AsType[*net.OpError](err)
+	return connecting || reading || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// Retries of a request that the node rate limits with a JSON-RPC error and HTTP
+// status 200, as httpretry retries those with status 429: up to
+// rateLimitRetries times, waiting rateLimitDelay, doubling for each retry up to
+// rateLimitMaxDelay, with jitter.
+var (
+	rateLimitRetries  = 4
+	rateLimitDelay    = 1 * time.Second
+	rateLimitMaxDelay = 30 * time.Second
+)
+
 // RawRequest calls method with params, and decodes its result into result
 // unless result is nil. It is for methods that the client has no function for,
 // such as a node's own methods. A JSON-RPC error response is returned as an
-// *Error.
+// *Error, and an HTTP error status as an *HTTPError. It retries a request that
+// the node rate limits with a JSON-RPC error and HTTP status 200.
 func (c *Client) RawRequest(ctx context.Context, result any, method string, params ...any) error {
+	delay := rateLimitDelay
+	for retry := 0; ; retry++ {
+		err := c.request(ctx, result, method, params...)
+		// A rate limit with an HTTP error status is httpretry's to retry, so that a
+		// request is sent at most 5 times.
+		if _, ok := errors.AsType[*HTTPError](err); ok || retry == rateLimitRetries || !rateLimited(err) {
+			return err
+		}
+		wait := delay/2 + rand.N(delay/2+1)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(wait):
+		}
+		delay = min(2*delay, rateLimitMaxDelay)
+	}
+}
+
+func (c *Client) request(ctx context.Context, result any, method string, params ...any) error {
 	if params == nil {
 		params = []any{}
 	}
@@ -217,11 +318,14 @@ func (c *Client) RawRequest(ctx context.Context, result any, method string, para
 		// Some nodes reject requests with an HTTP error status and a JSON-RPC error in
 		// the body, such as for a block range that is too large.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		httpErr := &HTTPError{Status: resp.Status, StatusCode: resp.StatusCode}
 		var res response
 		if json.Unmarshal(body, &res) == nil && res.Error != nil {
-			return fmt.Errorf("%s: HTTP %s: %w", method, resp.Status, res.Error)
+			httpErr.Err = res.Error
+		} else {
+			httpErr.Body = string(bytes.TrimSpace(body[:min(len(body), 512)]))
 		}
-		return fmt.Errorf("%s: HTTP %s: %s", method, resp.Status, bytes.TrimSpace(body[:min(len(body), 512)]))
+		return fmt.Errorf("%s: %w", method, httpErr)
 	}
 
 	var res response
