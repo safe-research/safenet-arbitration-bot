@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -108,6 +111,30 @@ func (c *Client) GetCode(ctx context.Context, address Address, block BlockNumber
 	var result Bytes
 	err := c.RawRequest(ctx, &result, "eth_getCode", address, block)
 	return result, err
+}
+
+// GetBalance returns the balance of address, in wei, as of block
+// (eth_getBalance).
+func (c *Client) GetBalance(ctx context.Context, address Address, block BlockNumber) (*big.Int, error) {
+	var result string
+	if err := c.RawRequest(ctx, &result, "eth_getBalance", address, block); err != nil {
+		return nil, err
+	}
+	digits, ok := strings.CutPrefix(result, "0x")
+	balance, valid := new(big.Int).SetString(digits, 16)
+	if !ok || !valid || strings.ContainsAny(digits, "+-") {
+		return nil, fmt.Errorf("eth_getBalance: invalid quantity %q", result)
+	}
+	return balance, nil
+}
+
+// GetTransactionCount returns the nonce of address, the number of transactions
+// that it sent, or contracts that it created if it is a contract, as of block
+// (eth_getTransactionCount).
+func (c *Client) GetTransactionCount(ctx context.Context, address Address, block BlockNumber) (uint64, error) {
+	var result Quantity
+	err := c.RawRequest(ctx, &result, "eth_getTransactionCount", address, block)
+	return uint64(result), err
 }
 
 // GetStorageAt returns the value of the storage slot of the contract at address
@@ -257,6 +284,38 @@ func Transient(err error) bool {
 	_, connecting := errors.AsType[*url.Error](err)
 	_, reading := errors.AsType[*net.OpError](err)
 	return connecting || reading || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// Reverted reports whether err is the node's answer that a call reverted, which
+// nodes answer with JSON-RPC error 3, or with a message about the revert. A
+// transient error is never one, even if its body names a revert, since the node
+// didn't run the call.
+func Reverted(err error) bool {
+	rpcErr, ok := errors.AsType[*Error](err)
+	return ok && !Transient(err) && (rpcErr.Code == 3 || strings.Contains(strings.ToLower(rpcErr.Message), "revert"))
+}
+
+// halts start the messages of the errors that nodes answer a call that halted
+// with: reth's and anvil's, such as "EVM error: InvalidFEOpcode" and "out of
+// gas: gas required exceeds: 50000000", and geth's, which has one for each kind
+// of halt.
+var halts = []string{
+	"evm error", "out of gas", "invalid opcode", "stack underflow", "stack limit reached", "invalid jump destination",
+	"return data out of bounds",
+}
+
+// Halted reports whether err is the node's answer that a call halted without
+// reverting, such as on an invalid opcode, or when it ran out of gas, which
+// nodes answer with various codes, so it is told by its message. Like a revert,
+// it is the code's answer, unlike an error about the node, such as a block that
+// it doesn't have, or a call that it stopped after a timeout.
+func Halted(err error) bool {
+	rpcErr, ok := errors.AsType[*Error](err)
+	if !ok || Transient(err) {
+		return false
+	}
+	message := strings.ToLower(rpcErr.Message)
+	return slices.ContainsFunc(halts, func(prefix string) bool { return strings.HasPrefix(message, prefix) })
 }
 
 // Retries of a request that the node rate limits with a JSON-RPC error and HTTP
