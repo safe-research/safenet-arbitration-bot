@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -76,6 +77,27 @@ func openScan(ctx context.Context, e *env, requestFile string, blocks uint64) (*
 		return nil, err
 	}
 	return &scan{safeRef: safe, ToBlock: safe.SafeBlock, FromBlock: safe.SafeBlock - min(blocks-1, safe.SafeBlock)}, nil
+}
+
+// openRange returns the Safe of the request in the file at requestFile and,
+// unless all is set, the first block of a scan of the last blocks blocks up to
+// its Safe block. With all, the blocks are those that the Safe Transaction
+// Service names, so the -blocks flag must not be set.
+func openRange(ctx context.Context, e *env, flags *flag.FlagSet, requestFile string, blocks uint64, all bool) (*safeRef, *uint64, error) {
+	if !all {
+		scan, err := openScan(ctx, e, requestFile, blocks)
+		if err != nil {
+			return nil, nil, err
+		}
+		return scan.safeRef, &scan.FromBlock, nil
+	}
+	set := false
+	flags.Visit(func(f *flag.Flag) { set = set || f.Name == "blocks" })
+	if set {
+		return nil, nil, usageError("-blocks doesn't apply with -all, which reads the blocks that the Safe Transaction Service names")
+	}
+	safe, err := openSafe(ctx, e, requestFile)
+	return safe, nil, err
 }
 
 // txService returns a client for the Safe Transaction Service of the chain with

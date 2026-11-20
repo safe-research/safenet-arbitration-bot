@@ -1,15 +1,19 @@
 package txservice
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -370,5 +374,182 @@ func TestCreation(t *testing.T) {
 		if _, err := client.Creation(t.Context(), unknown); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Creation of %s: got error %v, want ErrNotFound", unknown, err)
 		}
+	}
+}
+
+// serveTransfers starts a service that knows safe and lists the transfers, as
+// the service does: it filters them by the query's kind, sender, recipient,
+// block, and time, sorts them by their time alone, with those of one time in
+// another order for each query, as the service's order allows, and lists the
+// first page of them. Like the service, it lists nothing for any other Safe,
+// which it doesn't know. It fails after 100 queries, so that a client that
+// doesn't stop fails fast. It returns a client for it, and the queries for the
+// transfers of safe.
+func serveTransfers(t *testing.T, safe ethrpc.Address, transfers []map[string]any) (*Client, *[]url.Values) {
+	t.Helper()
+	var mu sync.Mutex
+	var queries []url.Values
+	types := map[string]string{"erc20": "ERC20_TRANSFER", "ether": "ETHER_TRANSFER"}
+	date := func(x map[string]any) time.Time {
+		d, _ := time.Parse(time.RFC3339, x["executionDate"].(string))
+		return d
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		path, _ := strings.CutPrefix(r.URL.Path, "/api/v1/safes/")
+		address, endpoint, _ := strings.Cut(path, "/")
+		switch {
+		case address == safe.String() && endpoint == "":
+			json.NewEncoder(w).Encode(map[string]any{"address": safe})
+			return
+		case endpoint != "transfers/":
+			http.NotFound(w, r)
+			return
+		case address != safe.String():
+			json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
+			return
+		}
+		mu.Lock()
+		queries = append(queries, q)
+		n := len(queries)
+		mu.Unlock()
+		if n > 100 {
+			http.Error(w, "too many queries", http.StatusInternalServerError)
+			return
+		}
+		before, err := strconv.ParseUint(q.Get("block_number__lt"), 10, 64)
+		latest := time.Unix(1<<40, 0)
+		if q.Has("execution_date__lte") {
+			latest, _ = time.Parse(time.RFC3339, q.Get("execution_date__lte"))
+		}
+		if err != nil || q.Get("limit") != "200" || q.Has("offset") {
+			http.Error(w, "bad query", http.StatusBadRequest)
+			return
+		}
+		results := []map[string]any{}
+		for _, x := range transfers {
+			kind := (q.Get("erc20") == "true" && x["type"] == types["erc20"]) || (q.Get("ether") == "true" && x["type"] == types["ether"])
+			if kind && x["blockNumber"].(uint64) < before && !date(x).After(latest) &&
+				(q.Get("_from") == "" || q.Get("_from") == x["from"].(ethrpc.Address).String()) &&
+				(q.Get("to") == "" || q.Get("to") == x["to"].(ethrpc.Address).String()) {
+				results = append(results, x)
+			}
+		}
+		slices.SortStableFunc(results, func(a, b map[string]any) int {
+			tie := cmp.Compare(a["blockNumber"].(uint64), b["blockNumber"].(uint64))
+			if n%2 == 0 {
+				tie = -tie
+			}
+			return cmp.Or(date(b).Compare(date(a)), tie)
+		})
+		json.NewEncoder(w).Encode(map[string]any{"count": len(results), "results": results[:min(len(results), transferPage)]})
+	}))
+	t.Cleanup(server.Close)
+	return NewClient(server.URL, ethrpc.Mainnet), &queries
+}
+
+// transferAt returns a transfer as the service lists it, in block, four blocks
+// a second, as on Arbitrum One.
+func transferAt(kind string, block uint64, hash ethrpc.Hash, token *ethrpc.Address, from, to ethrpc.Address, value string) map[string]any {
+	return map[string]any{
+		"type": kind, "blockNumber": block, "transactionHash": hash, "tokenAddress": token, "from": from, "to": to, "value": value,
+		"executionDate": time.Unix(int64(block/4), 0).UTC().Format(time.RFC3339),
+	}
+}
+
+func TestTransfers(t *testing.T) {
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	token := ethrpc.MustParseAddress("0x7000000000000000000000000000000000000001")
+	bob := ethrpc.MustParseAddress("0xb0b0000000000000000000000000000000000004")
+	// An ERC-20 transfer out of the Safe in each of the blocks 1000 to 2001, so
+	// that the pages end in the middle of the transfers of one time, then one to
+	// bob and one after the last block, and native and ERC-20 transfers into the
+	// Safe.
+	var transfers []map[string]any
+	for b := uint64(1000); b <= 2001; b++ {
+		transfers = append(transfers, transferAt("ERC20_TRANSFER", b, ethrpc.Hash{30: byte(b >> 8), 31: byte(b)}, &token, safe, ethrpc.Address{18: byte(b >> 8), 19: byte(b)}, strconv.FormatUint(b, 10)))
+	}
+	transfers = append(transfers,
+		transferAt("ERC20_TRANSFER", 1600, ethrpc.Hash{0: 1}, &token, safe, bob, "7"),
+		transferAt("ERC20_TRANSFER", 2002, ethrpc.Hash{0: 2}, &token, safe, bob, "8"),
+		transferAt("ETHER_TRANSFER", 1500, ethrpc.Hash{0: 3}, nil, bob, safe, "9"),
+		transferAt("ERC20_TRANSFER", 1500, ethrpc.Hash{0: 4}, &token, bob, safe, "10"),
+	)
+	client, queries := serveTransfers(t, safe, transfers)
+
+	got, err := client.Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2001})
+	if err != nil {
+		t.Fatalf("Transfers: %v", err)
+	}
+	if len(got) != 1003 {
+		t.Fatalf("Transfers: got %d transfers, want the 1,003 out of the Safe up to block 2001", len(got))
+	}
+	seen := make(map[ethrpc.Hash]bool)
+	for _, x := range got {
+		if seen[x.TxHash] || x.From != safe || x.Type != "ERC20_TRANSFER" || x.Token == nil || *x.Token != token || x.Block > 2001 {
+			t.Fatalf("Transfers: got %+v, twice or not an ERC-20 transfer out of the Safe up to block 2001", x)
+		}
+		seen[x.TxHash] = true
+	}
+	// Each query after the first is for the transfers up to an earlier time. The
+	// filters are the service's.
+	var times []string
+	for _, q := range *queries {
+		times = append(times, q.Get("execution_date__lte"))
+		if q.Get("erc20") != "true" || q.Get("_from") != safe.String() || q.Has("to") || q.Get("block_number__lt") != "2002" {
+			t.Errorf("Transfers: got the query %v, want one for ERC-20 transfers from the Safe before block 2002", q)
+		}
+	}
+	if len(times) < 6 || times[0] != "" || !slices.IsSortedFunc(times[1:], func(a, b string) int { return strings.Compare(b, a) }) || len(slices.Compact(slices.Clone(times))) != len(times) {
+		t.Errorf("Transfers: listed the transfers up to the times %q, want none, then earlier and earlier ones", times)
+	}
+
+	if got, err := client.Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, To: &bob, ToBlock: 2001}); err != nil || len(got) != 1 || got[0].Value.Int64() != 7 {
+		t.Errorf("Transfers to bob: got %+v, %v, want the transfer of 7", got, err)
+	}
+	if got, err := client.Transfers(t.Context(), safe, TransferFilter{Kind: "ether", To: &safe, ToBlock: 2001}); err != nil || len(got) != 1 || got[0].Token != nil || got[0].Value.Int64() != 9 {
+		t.Errorf("native Transfers into the Safe: got %+v, %v, want the transfer of 9", got, err)
+	}
+	// A Safe that the service knows can have none.
+	if got, err := client.Transfers(t.Context(), safe, TransferFilter{Kind: "ether", To: &safe, ToBlock: 1000}); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("Transfers of none: got %v, %v, want an empty list", got, err)
+	}
+}
+
+func TestTransfersErrors(t *testing.T) {
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	// More transfers at one time than the service lists at once.
+	var transfers []map[string]any
+	for i := range transferPage {
+		transfers = append(transfers, transferAt("ERC20_TRANSFER", 1000, ethrpc.Hash{30: byte(i >> 8), 31: byte(i)}, &safe, safe, safe, "1"))
+	}
+	client, _ := serveTransfers(t, safe, transfers)
+	if _, err := client.Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000}); err == nil || !strings.Contains(err.Error(), "200 transfers or more at 1970-01-01T00:04:10Z") {
+		t.Errorf("Transfers of a full second: got error %v, want one about the second", err)
+	}
+	// The service lists nothing for a Safe that it doesn't know.
+	other := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000002")
+	if _, err := client.Transfers(t.Context(), other, TransferFilter{Kind: "erc20", From: &other, ToBlock: 2000}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Transfers of an unknown Safe: got error %v, want ErrNotFound", err)
+	}
+	// A service that leaves out the time filter lists the same transfers again.
+	var page []map[string]any
+	for b := range uint64(transferPage) {
+		page = append(page, transferAt("ERC20_TRANSFER", 4000-4*b, ethrpc.Hash{30: byte(b >> 8), 31: byte(b)}, &safe, safe, safe, "1"))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"results": page})
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 5000}); err == nil || !strings.Contains(err.Error(), "after the") {
+		t.Errorf("Transfers from a service without the time filter: got error %v, want one about a transfer after the time asked for", err)
+	}
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000}); err == nil ||
+		errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "500") {
+		t.Errorf("Transfers from a failing service: got error %v, want one with the status", err)
 	}
 }

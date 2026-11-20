@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/httpretry"
@@ -155,6 +156,126 @@ func (c *Client) Executions(ctx context.Context, safe ethrpc.Address) ([]Executi
 		executions = append(executions, x)
 	}
 	return executions, nil
+}
+
+// Transfer is a transfer into or out of a Safe that the service lists.
+type Transfer struct {
+	// Type is the service's type of the transfer, such as "ERC20_TRANSFER" or
+	// "ETHER_TRANSFER".
+	Type   string
+	Block  uint64
+	TxHash ethrpc.Hash
+	// Token is the token's contract, or nil for the native currency.
+	Token *ethrpc.Address
+	From  ethrpc.Address
+	To    ethrpc.Address
+	// Value is the amount in the token's or the currency's smallest unit, or nil
+	// for a transfer without one, such as of an ERC-721 token.
+	Value *big.Int
+}
+
+// TransferFilter selects the transfers of a Safe that Transfers lists.
+type TransferFilter struct {
+	// Kind is "erc20" or "ether", the service's filters for ERC-20 transfers and
+	// for transfers of the native currency.
+	Kind string
+	// From and To are the sender and the recipient of the transfers, if they are
+	// set. One of them is the Safe, which keeps the transfers to one direction.
+	From, To *ethrpc.Address
+	// ToBlock is the last block of the transfers.
+	ToBlock uint64
+}
+
+// transferPage is the number of transfers that Transfers asks for in each
+// request, the most that the service returns at once.
+const transferPage = 200
+
+// Transfers returns the transfers of safe that filter selects and the service
+// lists, from the newest, as it reports them: none of them are checked. The
+// service filters them, so the transfers of other kinds and directions don't
+// count towards maxListed. It returns ErrNotFound if the service doesn't know
+// the Safe.
+func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter TransferFilter) ([]Transfer, error) {
+	// The service rejects addresses without their EIP-55 checksum.
+	base, err := url.JoinPath(c.baseURL, "api", "v1", "safes", safe.String(), "transfers")
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{
+		filter.Kind:        {"true"},
+		"block_number__lt": {strconv.FormatUint(filter.ToBlock+1, 10)},
+		"limit":            {strconv.Itoa(transferPage)},
+	}
+	if filter.From != nil {
+		query.Set("_from", filter.From.String())
+	}
+	if filter.To != nil {
+		query.Set("to", filter.To.String())
+	}
+	transfers := []Transfer{}
+	// The service sorts the transfers by their time alone, which several blocks can
+	// share, and lists only the newest of a query, so pages by offset can list a
+	// transfer twice or not at all. Each request is for the first page of the
+	// transfers up to the oldest time of the page before, whose transfers are
+	// listed again in full, since the page may have cut them off.
+	var before *time.Time
+	for {
+		if before != nil {
+			query.Set("execution_date__lte", before.UTC().Format(time.RFC3339Nano))
+		}
+		var page struct {
+			Results []struct {
+				Type            string          `json:"type"`
+				BlockNumber     uint64          `json:"blockNumber"`
+				TransactionHash ethrpc.Hash     `json:"transactionHash"`
+				TokenAddress    *ethrpc.Address `json:"tokenAddress"`
+				From            ethrpc.Address  `json:"from"`
+				To              ethrpc.Address  `json:"to"`
+				Value           *number         `json:"value"`
+				ExecutionDate   time.Time       `json:"executionDate"`
+			} `json:"results"`
+		}
+		if err := c.get(ctx, base+"/?"+query.Encode(), &page); err != nil {
+			return nil, err
+		}
+		var oldest time.Time
+		for i, r := range page.Results {
+			if before != nil && r.ExecutionDate.After(*before) {
+				return nil, fmt.Errorf("the service lists a transfer at %s, after the %s that it was asked for", r.ExecutionDate.Format(time.RFC3339), before.Format(time.RFC3339))
+			}
+			if i == 0 || r.ExecutionDate.Before(oldest) {
+				oldest = r.ExecutionDate
+			}
+		}
+		full := len(page.Results) == transferPage
+		listed := len(transfers)
+		for _, r := range page.Results {
+			if full && r.ExecutionDate.Equal(oldest) {
+				continue
+			}
+			t := Transfer{Type: r.Type, Block: r.BlockNumber, TxHash: r.TransactionHash, Token: r.TokenAddress, From: r.From, To: r.To}
+			if r.Value != nil {
+				t.Value = r.Value.Int
+			}
+			transfers = append(transfers, t)
+		}
+		if full && len(transfers) == listed {
+			return nil, fmt.Errorf("the service lists %d transfers or more at %s, more than it lists at once", transferPage, oldest.Format(time.RFC3339))
+		}
+		if len(transfers) > maxListed {
+			return nil, fmt.Errorf("the service lists more than %d transfers", maxListed)
+		}
+		if !full {
+			break
+		}
+		before = &oldest
+	}
+	if len(transfers) == 0 {
+		if err := c.known(ctx, safe); err != nil {
+			return nil, err
+		}
+	}
+	return transfers, nil
 }
 
 // list returns the results of the listing of safe at endpoint, such as
