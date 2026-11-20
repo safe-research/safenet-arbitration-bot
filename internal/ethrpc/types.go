@@ -211,9 +211,11 @@ type Receipt struct {
 	// Status is 1 if the transaction succeeded and 0 if it reverted.
 	Status Quantity `json:"status"`
 	From   Address  `json:"from"`
-	// To is nil for a transaction that creates a contract.
-	To   *Address `json:"to"`
-	Logs []Log    `json:"logs"`
+	// To is nil for a transaction that creates a contract, and ContractAddress is
+	// the contract that it creates, or nil for any other transaction.
+	To              *Address `json:"to"`
+	ContractAddress *Address `json:"contractAddress"`
+	Logs            []Log    `json:"logs"`
 }
 
 // Block is a block header, as returned by eth_getBlockByNumber. Only the fields

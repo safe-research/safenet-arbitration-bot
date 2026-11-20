@@ -53,6 +53,10 @@ type chain struct {
 	// resetting are the methods whose responses the node cuts off with a TCP reset,
 	// as an overloaded proxy does.
 	resetting []string
+	// receipts are the receipts by transaction hash.
+	receipts map[ethrpc.Hash]ethrpc.Receipt
+	// deployed is the first block at which the Safe has code, or 0 if it has none.
+	deployed uint64
 
 	mu sync.Mutex
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
@@ -152,6 +156,24 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			json.Unmarshal(req.Params[0], &hash)
 			if tx, ok := c.txs[hash]; ok {
 				res["result"] = tx
+			} else {
+				res["result"] = nil
+			}
+		case "eth_getCode":
+			var address ethrpc.Address
+			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[0], &address)
+			json.Unmarshal(req.Params[1], &block)
+			if address == safe && c.deployed > 0 && uint64(block) >= c.deployed {
+				res["result"] = "0x5afe"
+			} else {
+				res["result"] = "0x"
+			}
+		case "eth_getTransactionReceipt":
+			var hash ethrpc.Hash
+			json.Unmarshal(req.Params[0], &hash)
+			if receipt, ok := c.receipts[hash]; ok {
+				res["result"] = receipt
 			} else {
 				res["result"] = nil
 			}

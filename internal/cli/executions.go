@@ -42,9 +42,15 @@ type historyReport struct {
 	// those that they don't use, or null if the nonce is too large to list them.
 	Complete bool                    `json:"complete"`
 	Missing  []executions.NonceRange `json:"missingNonces"`
+	// Scanned are the ranges of blocks whose logs were scanned for the executions
+	// that the service doesn't list.
+	Scanned []executions.BlockRange `json:"scanned"`
 	// Rejected are the executions that the service lists but the chain doesn't
 	// confirm.
 	Rejected []executions.Rejected `json:"rejected"`
+	// Creation is the creation of the Safe's account, if the service has it and the
+	// chain confirms its block, or null.
+	Creation *executions.Creation `json:"creation"`
 }
 
 // serviceSource is a Safe Transaction Service that a command read, and when.
@@ -112,11 +118,17 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "only if its fields hash to its Safe transaction hash, and the Safe logged the execution of that hash in\n")
 		fmt.Fprintf(out, "the block and transaction that the service reports. Any other is rejected, with the reason.\n\n")
 		fmt.Fprintf(out, "Every execution uses the next nonce, so the Safe's nonce at the Safe block is the number of executions\n")
-		fmt.Fprintf(out, "up to it, unless a delegate call changed it. It reports the nonces that no execution found used, and\n")
-		fmt.Fprintf(out, "the history is complete if there are none, and the nonces of the executions found don't show that a\n")
-		fmt.Fprintf(out, "delegate call set the nonce back. A Safe that the service doesn't know is a warning, and its nonces\n")
-		fmt.Fprintf(out, "show what that leaves out. Executions by modules don't use nonces, and the service doesn't list them,\n")
-		fmt.Fprintf(out, "so they aren't listed.\n\n")
+		fmt.Fprintf(out, "up to it, unless a delegate call changed it. For the nonces that no execution found used, it scans the\n")
+		fmt.Fprintf(out, "blocks between the executions before and after them, from the Safe's creation, or up to the Safe\n")
+		fmt.Fprintf(out, "block, and reports the ranges, then the nonces still missing. A scan that fails, such as one that a\n")
+		fmt.Fprintf(out, "public node times out, is a warning, and leaves its nonces missing. The history is complete if none\n")
+		fmt.Fprintf(out, "are. A Safe that the service doesn't know is a warning, and the scans look for all of its executions.\n")
+		fmt.Fprintf(out, "Executions by modules don't use nonces, and the service doesn't list them, so they aren't listed.\n\n")
+		fmt.Fprintf(out, "It also reports the block that created the Safe's account, if the service names the transaction and\n")
+		fmt.Fprintf(out, "the chain confirms that the account got its code in that block, which needs a node that serves the\n")
+		fmt.Fprintf(out, "code at old blocks. The transaction itself is only reported if it is bound to the account: its receipt\n")
+		fmt.Fprintf(out, "names the account as the contract that it created, or has the account's ProxyCreation event from an\n")
+		fmt.Fprintf(out, "official proxy factory.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
@@ -161,7 +173,8 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		}
 		report.History = &historyReport{
 			Service: serviceSource{URL: finder.Service.URL(), ObservedAt: observed},
-			Nonce:   history.Nonce, Complete: history.Complete(), Missing: history.Missing, Rejected: history.Rejected,
+			Nonce:   history.Nonce, Complete: history.Complete(), Missing: history.Missing,
+			Scanned: history.Scanned, Rejected: history.Rejected, Creation: history.Creation,
 		}
 		found = history.Executions
 		if !history.Complete() {
@@ -242,7 +255,7 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 }
 
 // writeHistory writes the header of the text output of `arbot executions -all`:
-// the service, the nonce, and the missing nonces.
+// the service, the nonce, the missing nonces, the scans, and the creation.
 func writeHistory(e *env, report *executionsReport) {
 	h := report.History
 	fmt.Fprintf(e.stdout, "Safe transactions executed by %s on chain %d, up to block %d\n", report.Safe, report.ChainID, report.ToBlock)
@@ -254,6 +267,19 @@ func writeHistory(e *env, report *executionsReport) {
 	fmt.Fprintf(e.stdout, "Nonce at block %d: %s (%s)\n", report.ToBlock, h.Nonce, completeness)
 	if h.Missing != nil {
 		fmt.Fprintf(e.stdout, "Missing nonces: %s\n", nonceRanges(h.Missing))
+	}
+	for _, r := range h.Scanned {
+		fmt.Fprintf(e.stdout, "Scanned blocks %d to %d for executions that the service doesn't list\n", r.FromBlock, r.ToBlock)
+	}
+	switch c := h.Creation; {
+	case c == nil:
+		fmt.Fprintf(e.stdout, "Creation: unknown\n")
+	case c.TxHash == nil:
+		fmt.Fprintf(e.stdout, "Created in block %d, by a transaction that arbot doesn't bind to the account\n", c.Block)
+	case c.Factory != nil:
+		fmt.Fprintf(e.stdout, "Created in block %d, transaction %s (ProxyCreation event of %s)\n", c.Block, *c.TxHash, c.Factory)
+	default:
+		fmt.Fprintf(e.stdout, "Created in block %d, transaction %s (contract creation)\n", c.Block, *c.TxHash)
 	}
 	fmt.Fprintln(e.stdout)
 }
