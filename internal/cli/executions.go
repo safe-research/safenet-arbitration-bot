@@ -2,13 +2,15 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"math/big"
 	"text/tabwriter"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/checks"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
-	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
 )
 
 // executionsReport is the JSON output of `arbot executions`.
@@ -16,15 +18,47 @@ type executionsReport struct {
 	Safe    ethrpc.Address `json:"safe"`
 	ChainID uint64         `json:"chainId"`
 	// FromBlock and ToBlock are the blocks searched, both included. ToBlock is the
-	// request's Safe block.
-	FromBlock  uint64      `json:"fromBlock"`
+	// request's Safe block. FromBlock is left out with -all, which reads the blocks
+	// that the service names rather than a range.
+	FromBlock  *uint64     `json:"fromBlock,omitempty"`
 	ToBlock    uint64      `json:"toBlock"`
 	Executions []execution `json:"executions"`
+	// History is how the executions were found with -all, and is left out without
+	// it.
+	History *historyReport `json:"history,omitempty"`
+}
+
+// historyReport is how `arbot executions -all` found the executions.
+type historyReport struct {
+	// Service is the Safe Transaction Service that listed the executions, an
+	// offchain source (§ 3.4), and when it was observed.
+	Service serviceSource `json:"service"`
+	// Nonce is the Safe's nonce at the Safe block. Every execution uses the next
+	// nonce, so it is the number of Safe transactions that the Safe executed up to
+	// it, unless a delegate call changed it.
+	Nonce *big.Int `json:"nonce"`
+	// Complete is whether the executions account for every nonce below Nonce, and
+	// Missing are the ranges of those that they don't, or null if the nonce is too
+	// large to list them.
+	Complete bool                    `json:"complete"`
+	Missing  []executions.NonceRange `json:"missingNonces"`
+	// Rejected are the executions that the service lists but the chain doesn't
+	// confirm.
+	Rejected []executions.Rejected `json:"rejected"`
+}
+
+// serviceSource is a Safe Transaction Service that a command read, and when.
+type serviceSource struct {
+	URL        string    `json:"url"`
+	ObservedAt time.Time `json:"observedAt"`
 }
 
 // execution is an execution in the output of `arbot executions`.
 type execution struct {
 	executions.Execution
+	// Proposal is whether the Safe transaction is the request's own, whose effects
+	// aren't evidence (§ 3.6). It is left out if it isn't.
+	Proposal bool `json:"proposal,omitempty"`
 	// Target and Calls are the account that the transaction's own call is to, and
 	// the calls that the transaction makes, as arbot calls reports them, with
 	// -calls. They are left out without -calls, and for an unknown transaction.
@@ -40,6 +74,7 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 	requestFile := flags.String("request-file", "", "read the Safe, its chain, and the block from the request in the JSON file at `path`, as written by arbot info -json")
 	blocks := flags.Uint64("blocks", defaultScanBlocks, "search this number of blocks up to the request's Safe block")
 	withCalls := flags.Bool("calls", false, "also list the calls that each transaction makes, as arbot calls lists them")
+	all := flags.Bool("all", false, "list the executions up to the request's Safe block in the blocks that the Safe Transaction Service names, instead of searching the last -blocks blocks")
 	flags.Usage = func() {
 		out := flags.Output()
 		fmt.Fprintf(out, "Usage: %s executions [flags] -request-file <path>\n\n", e.progname)
@@ -57,48 +92,97 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "A transaction is only reported if its EIP-712 hash is the one that the Safe logged, whichever the\n")
 		fmt.Fprintf(out, "source. The calldata and traces have no nonce, so it is worked out from the Safe's nonce at the last\n")
 		fmt.Fprintf(out, "block. If no source has the transaction, it is an unknown transaction, or null with -json.\n")
-		fmt.Fprintf(out, "The text output shows the selector and length of the data, and -json has all of it.\n\n")
+		fmt.Fprintf(out, "The text output shows the selector and length of the data, and -json has all of it. The execution\n")
+		fmt.Fprintf(out, "of the request's own Safe transaction, if it was executed by the Safe block, is marked, since its\n")
+		fmt.Fprintf(out, "effects aren't evidence (§ 3.6).\n\n")
 		fmt.Fprintf(out, "With -calls, it also lists the calls that each known transaction makes, as arbot calls lists those\n")
 		fmt.Fprintf(out, "of a request's transaction, with the accounts that they are to as of the request's Safe block: delegate\n")
 		fmt.Fprintf(out, "calls to MultiSend contracts decoded into their calls, and each call's data decoded as a well-known\n")
 		fmt.Fprintf(out, "function, if it is one, such as an ERC-20 transfer, or a Safe's execTransaction and the call it makes.\n")
 		fmt.Fprintf(out, "The refund call is the largest refund that a transaction allows, and the payment is what it paid. The\n")
 		fmt.Fprintf(out, "calls of a failed execution had no effect.\n\n")
+		fmt.Fprintf(out, "With -all, it lists the executions up to the request's Safe block instead, which a scan of the Safe's\n")
+		fmt.Fprintf(out, "logs can't reach on public nodes. It needs the Safe Transaction Service, an offchain source that it\n")
+		fmt.Fprintf(out, "reports with its URL and when it was observed, and lists the Safe's executed transactions from it. It\n")
+		fmt.Fprintf(out, "reads the Safe's logs in each block that the service names, and keeps the executions that the Safe\n")
+		fmt.Fprintf(out, "logged there, whether the service lists them rightly or not, which it decodes as above, taking a\n")
+		fmt.Fprintf(out, "transaction that the service lists with its hash from the listing. A block whose logs have no\n")
+		fmt.Fprintf(out, "execution of the Safe is read again once. An execution that the service lists is confirmed only if\n")
+		fmt.Fprintf(out, "its fields hash to its Safe transaction hash, and the Safe logged the execution of that hash in the\n")
+		fmt.Fprintf(out, "block and transaction that the service reports. Any other is rejected, with the reason.\n\n")
+		fmt.Fprintf(out, "Every execution uses the next nonce, so the Safe's nonce at the Safe block is the number of executions\n")
+		fmt.Fprintf(out, "up to it, unless a delegate call changed it. It reports the nonces that no execution found used, and\n")
+		fmt.Fprintf(out, "the history is complete if there are none. A Safe that the service doesn't know is a warning, and its\n")
+		fmt.Fprintf(out, "nonces show what that leaves out. Executions by modules don't use nonces, and the service doesn't\n")
+		fmt.Fprintf(out, "list them, so they aren't listed.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
 		return err
 	}
-	scan, err := openScan(ctx, e, *requestFile, *blocks)
-	if err != nil {
-		return err
+	blocksSet := false
+	flags.Visit(func(f *flag.Flag) { blocksSet = blocksSet || f.Name == "blocks" })
+	if *all && blocksSet {
+		return usageError("-blocks doesn't apply with -all, which reads the blocks that the Safe Transaction Service names")
+	}
+	var ref *safeRef
+	var fromBlock *uint64
+	if *all {
+		safe, err := openSafe(ctx, e, *requestFile)
+		if err != nil {
+			return err
+		}
+		ref = safe
+	} else {
+		scan, err := openScan(ctx, e, *requestFile, *blocks)
+		if err != nil {
+			return err
+		}
+		ref, fromBlock = scan.safeRef, &scan.FromBlock
 	}
 
 	finder := &executions.Finder{
-		Eth:  scan.eth,
-		Warn: func(err error) { fmt.Fprintf(e.stderr, "%s: warning: %v\n", e.progname, err) },
+		Eth:     ref.eth,
+		Service: txService(e, ref.ChainID),
+		Warn:    func(err error) { fmt.Fprintf(e.stderr, "%s: warning: %v\n", e.progname, err) },
 	}
-	baseURL, ok := e.cfg.TxServices[scan.ChainID]
-	if !ok {
-		baseURL = txservice.DefaultURLs[scan.ChainID]
+	report := executionsReport{Safe: ref.Safe, ChainID: ref.ChainID, FromBlock: fromBlock, ToBlock: ref.SafeBlock}
+	var found []executions.Execution
+	if *all {
+		if finder.Service == nil {
+			return errNoTxService("-all", ref.ChainID)
+		}
+		observed := time.Now().UTC().Truncate(time.Second)
+		history, err := finder.FindAll(ctx, ref.Safe, ethrpc.BlockNumber(ref.SafeBlock))
+		if err != nil {
+			return err
+		}
+		report.History = &historyReport{
+			Service: serviceSource{URL: finder.Service.URL(), ObservedAt: observed},
+			Nonce:   history.Nonce, Complete: history.Complete(), Missing: history.Missing, Rejected: history.Rejected,
+		}
+		found = history.Executions
+		if !history.Complete() {
+			finder.Warn(fmt.Errorf("the executions found don't account for every nonce below the Safe's nonce %s at block %d", history.Nonce, ref.SafeBlock))
+		}
+	} else {
+		var err error
+		if found, err = finder.Find(ctx, ref.Safe, ethrpc.BlockNumber(*fromBlock), ethrpc.BlockNumber(ref.SafeBlock)); err != nil {
+			return err
+		}
 	}
-	if baseURL != "" {
-		finder.Service = txservice.NewClient(baseURL, scan.ChainID)
-	}
-	found, err := finder.Find(ctx, scan.Safe, ethrpc.BlockNumber(scan.FromBlock), ethrpc.BlockNumber(scan.ToBlock))
-	if err != nil {
-		return err
-	}
-	report := executionsReport{
-		Safe: scan.Safe, ChainID: scan.ChainID, FromBlock: scan.FromBlock, ToBlock: scan.ToBlock,
-		Executions: make([]execution, len(found)),
-	}
+	report.Executions = make([]execution, len(found))
 	var reader *checks.CallReader
 	if *withCalls {
-		reader = checks.NewCallReader(scan.eth, scan.Safe, ethrpc.BlockNumber(scan.SafeBlock))
+		reader = checks.NewCallReader(ref.eth, ref.Safe, ethrpc.BlockNumber(ref.SafeBlock))
 	}
+	var proposal *execution
 	for i, x := range found {
 		report.Executions[i].Execution = x
+		if x.SafeTxHash == ref.SafeTxHash {
+			report.Executions[i].Proposal = true
+			proposal = &report.Executions[i]
+		}
 		if reader == nil || x.Transaction == nil {
 			continue
 		}
@@ -112,11 +196,68 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 	if *asJSON {
 		return writeJSON(e.stdout, report)
 	}
-	fmt.Fprintf(e.stdout, "Safe transactions executed by %s on chain %d, in blocks %d to %d\n\n", report.Safe, report.ChainID, report.FromBlock, report.ToBlock)
+	if report.History != nil {
+		writeHistory(e, &report)
+	} else {
+		fmt.Fprintf(e.stdout, "Safe transactions executed by %s on chain %d, in blocks %d to %d\n\n", report.Safe, report.ChainID, *report.FromBlock, report.ToBlock)
+	}
 	if len(found) == 0 {
-		_, err = fmt.Fprintln(e.stdout, "none")
+		fmt.Fprintln(e.stdout, "none")
+	} else if err := writeExecutions(e, found); err != nil {
 		return err
 	}
+	if proposal != nil {
+		fmt.Fprintf(e.stdout, "\nThe execution in block %d, transaction %s, is of the request's own Safe transaction, whose effects aren't evidence (§ 3.6).\n", proposal.Block, proposal.TxHash)
+	}
+	if h := report.History; h != nil && len(h.Rejected) > 0 {
+		fmt.Fprintf(e.stdout, "\nRejected\n\n")
+		w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NONCE\tSAFE TX HASH\tTRANSACTION\tREASON")
+		for _, r := range h.Rejected {
+			nonce := "-"
+			if r.Nonce != nil {
+				nonce = r.Nonce.String()
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", nonce, r.SafeTxHash, r.TxHash, r.Reason)
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	if reader == nil || len(found) == 0 {
+		return nil
+	}
+
+	fmt.Fprintf(e.stdout, "\nCalls\n\n")
+	w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NONCE\t#\tKIND\tTO\tACCOUNT\tOPERATION\tVALUE\tFUNCTION")
+	for _, x := range report.Executions {
+		for i, c := range x.Calls {
+			fmt.Fprintf(w, "%s\t%d\t%s\n", x.Transaction.Nonce, i+1, callText(c))
+		}
+	}
+	return w.Flush()
+}
+
+// writeHistory writes the header of the text output of `arbot executions -all`:
+// the service, the nonce, and the missing nonces.
+func writeHistory(e *env, report *executionsReport) {
+	h := report.History
+	fmt.Fprintf(e.stdout, "Safe transactions executed by %s on chain %d, up to block %d\n", report.Safe, report.ChainID, report.ToBlock)
+	fmt.Fprintf(e.stdout, "Listed by the Safe Transaction Service %q, observed %s, and confirmed by the Safe's logs\n\n", h.Service.URL, h.Service.ObservedAt.Format(time.RFC3339))
+	completeness := "complete"
+	if !h.Complete {
+		completeness = "incomplete"
+	}
+	fmt.Fprintf(e.stdout, "Nonce at block %d: %s (%s)\n", report.ToBlock, h.Nonce, completeness)
+	if h.Missing != nil {
+		fmt.Fprintf(e.stdout, "Missing nonces: %s\n", nonceRanges(h.Missing))
+	}
+	fmt.Fprintln(e.stdout)
+}
+
+// writeExecutions writes a table of executions.
+func writeExecutions(e *env, found []executions.Execution) error {
 	w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "BLOCK\tTRANSACTION\tRESULT\tSAFE TX HASH\tSOURCE\tNONCE\tTO\tVALUE\tOPERATION\tDATA")
 	for _, x := range found {
@@ -131,19 +272,26 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintf(w, "-\tunknown transaction\n")
 		}
 	}
-	if err := w.Flush(); err != nil || reader == nil {
-		return err
-	}
+	return w.Flush()
+}
 
-	fmt.Fprintf(e.stdout, "\nCalls\n\n")
-	w = tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NONCE\t#\tKIND\tTO\tACCOUNT\tOPERATION\tVALUE\tFUNCTION")
-	for _, x := range report.Executions {
-		for i, c := range x.Calls {
-			fmt.Fprintf(w, "%s\t%d\t%s\n", x.Transaction.Nonce, i+1, callText(c))
+// nonceRanges formats ranges of nonces, such as "0-3, 7", or "none".
+func nonceRanges(ranges []executions.NonceRange) string {
+	if len(ranges) == 0 {
+		return "none"
+	}
+	s := ""
+	for i, r := range ranges {
+		if i > 0 {
+			s += ", "
+		}
+		if r.From == r.To {
+			s += fmt.Sprint(r.From)
+		} else {
+			s += fmt.Sprintf("%d-%d", r.From, r.To)
 		}
 	}
-	return w.Flush()
+	return s
 }
 
 // summarizeData returns the selector and length of call data, such as

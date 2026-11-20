@@ -1,10 +1,13 @@
 package txservice
 
 import (
+	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -124,5 +127,120 @@ func TestDefaultURLs(t *testing.T) {
 		if !strings.HasPrefix(DefaultURLs[chainID], "https://") {
 			t.Errorf("DefaultURLs[%d]: got %q, want an HTTPS URL", chainID, DefaultURLs[chainID])
 		}
+	}
+}
+
+// serveExecutions starts a service that knows safe and lists n executed
+// transactions of it, in pages, with the ones in broken having no transaction
+// hash, and one that isn't executed, and returns a client for it. Like the
+// service, it lists nothing for any other Safe, which it doesn't know.
+func serveExecutions(t *testing.T, safe ethrpc.Address, n int, broken ...int) *Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The address has its checksum, which the service requires, so that of the Safe
+		// in another case is another Safe.
+		path, _ := strings.CutPrefix(r.URL.Path, "/tx-service/eth/api/v1/safes/")
+		address, endpoint, _ := strings.Cut(path, "/")
+		q := r.URL.Query()
+		offset, err := strconv.Atoi(q.Get("offset"))
+		switch {
+		case address == safe.String() && endpoint == "":
+			json.NewEncoder(w).Encode(map[string]any{"address": safe, "nonce": strconv.Itoa(n)})
+			return
+		case endpoint != "multisig-transactions/" || err != nil ||
+			q.Get("executed") != "true" || q.Get("ordering") != "nonce" || q.Get("limit") != "100":
+			http.NotFound(w, r)
+			return
+		case address != safe.String():
+			json.NewEncoder(w).Encode(map[string]any{"count": 0, "results": []any{}})
+			return
+		}
+		results := []map[string]any{}
+		for i := offset; i < min(n+1, offset+100); i++ {
+			result := map[string]any{
+				"safe": safe, "to": safe, "value": "0", "data": nil, "operation": 0, "safeTxGas": 0, "baseGas": 0,
+				"gasPrice": "0", "gasToken": ethrpc.Address{}, "refundReceiver": ethrpc.Address{}, "nonce": i,
+				"safeTxHash": ethrpc.Hash{0: 0x5a, 31: byte(i)}, "transactionHash": ethrpc.Hash{0: 0x7a, 31: byte(i)},
+				"blockNumber": 1000 + i, "isExecuted": true,
+			}
+			switch {
+			case i == n:
+				result["isExecuted"], result["transactionHash"], result["blockNumber"] = false, nil, nil
+			case slices.Contains(broken, i):
+				result["transactionHash"] = nil
+			}
+			results = append(results, result)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"count": n + 1, "results": results})
+	}))
+	t.Cleanup(server.Close)
+	return NewClient(server.URL+"/tx-service/eth", ethrpc.Mainnet)
+}
+
+func TestExecutions(t *testing.T) {
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	// More than a page, so that the client asks for the second one, with one
+	// without its onchain transaction.
+	got, err := serveExecutions(t, safe, 150, 7).Executions(t.Context(), safe)
+	if err != nil {
+		t.Fatalf("Executions: %v", err)
+	}
+	if len(got) != 150 {
+		t.Fatalf("Executions: got %d executions, want 150", len(got))
+	}
+	for i, x := range got {
+		want := Execution{SafeTxHash: ethrpc.Hash{0: 0x5a, 31: byte(i)}, TxHash: ethrpc.Hash{0: 0x7a, 31: byte(i)}, Block: uint64(1000 + i)}
+		if i == 7 {
+			// It is listed without them, for the caller to report.
+			want.TxHash, want.Block = ethrpc.Hash{}, 0
+		}
+		if x.SafeTxHash != want.SafeTxHash || x.TxHash != want.TxHash || x.Block != want.Block ||
+			x.Transaction == nil || x.Transaction.Nonce.Int64() != int64(i) || x.Transaction.Safe != safe || x.Transaction.ChainID.Int64() != 1 {
+			t.Errorf("Executions[%d]: got %+v, want %+v with a transaction of nonce %d", i, x, want, i)
+		}
+	}
+
+	// A full last page is followed by one with only the transaction that isn't
+	// executed.
+	if got, err := serveExecutions(t, safe, 99).Executions(t.Context(), safe); err != nil || len(got) != 99 {
+		t.Errorf("Executions of a full page: got %d executions and error %v, want 99", len(got), err)
+	}
+	// A Safe that the service knows can have no executions.
+	if got, err := serveExecutions(t, safe, 0).Executions(t.Context(), safe); err != nil || got == nil || len(got) != 0 {
+		t.Errorf("Executions of none: got %v and error %v, want an empty list", got, err)
+	}
+}
+
+func TestExecutionsCap(t *testing.T) {
+	// A listing that doesn't end, as spam would make it, fails at the cap, rather
+	// than when the server stops, at twice as many results.
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	page, _ := json.Marshal(map[string]any{"results": slices.Repeat([]map[string]any{{"safe": safe, "nonce": 0}}, pageSize)})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset > 2*maxListed {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Write(page)
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err == nil || !strings.Contains(err.Error(), "lists more than 100000") {
+		t.Errorf("Executions of an endless listing: got error %v, want one about the cap", err)
+	}
+}
+
+func TestExecutionsErrors(t *testing.T) {
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	// A service for another Safe lists nothing for this one, and doesn't know it.
+	other := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000002")
+	if _, err := serveExecutions(t, other, 5).Executions(t.Context(), safe); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Executions of an unknown Safe: got error %v, want ErrNotFound", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "500") {
+		t.Errorf("Executions from a failing service: got error %v, want one with the status", err)
 	}
 }
