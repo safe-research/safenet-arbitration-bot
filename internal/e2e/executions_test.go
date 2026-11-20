@@ -35,6 +35,7 @@ type executionJSON struct {
 	Payment     *big.Int                 `json:"payment"`
 	Source      string                   `json:"source"`
 	Transaction *safenet.SafeTransaction `json:"transaction"`
+	Proposal    bool                     `json:"proposal,omitempty"`
 }
 
 // TestExecutions runs `arbot executions` against real Safe 1.3.0 contracts on
