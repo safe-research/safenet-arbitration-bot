@@ -35,6 +35,7 @@ var (
 // stateAccount is an account of a stateNode at a block.
 type stateAccount struct {
 	code    ethrpc.Bytes
+	storage map[ethrpc.Hash]ethrpc.Hash
 	balance int64
 	nonce   uint64
 	// calls are what eth_call to the account returns for each selector. A call with
@@ -95,6 +96,10 @@ func (n *stateNode) serve(t *testing.T) string {
 		switch req.Method {
 		case "eth_getCode":
 			res["result"] = append(ethrpc.Bytes{}, a.code...)
+		case "eth_getStorageAt":
+			var slot ethrpc.Hash
+			json.Unmarshal(req.Params[1], &slot)
+			res["result"] = a.storage[slot]
 		case "eth_getBalance":
 			res["result"] = fmt.Sprintf("0x%x", a.balance)
 		case "eth_getTransactionCount":
