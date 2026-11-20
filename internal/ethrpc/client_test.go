@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -249,6 +250,41 @@ func TestGetCode(t *testing.T) {
 	}
 	if !bytes.Equal(code, []byte{0x60, 0x80}) {
 		t.Errorf("GetCode: got %s, want 0x6080", code)
+	}
+}
+
+func TestGetBalance(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getBalance", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
+		`{"result": "0x1000000000000000000000000"}`,
+	)
+	balance, err := client.GetBalance(t.Context(), Address{19: 0xaa}, 16)
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if want, _ := new(big.Int).SetString("1000000000000000000000000", 16); balance.Cmp(want) != 0 {
+		t.Errorf("GetBalance: got %s, want %s", balance, want)
+	}
+
+	for _, result := range []string{`"1000"`, `"0x"`, `"0xg"`, `"0x-1"`, `"0x+1"`, `16`} {
+		client := serve(t,
+			`{"jsonrpc": "2.0", "method": "eth_getBalance", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
+			`{"result": `+result+`}`,
+		)
+		if _, err := client.GetBalance(t.Context(), Address{19: 0xaa}, 16); err == nil {
+			t.Errorf("GetBalance of %s: expected an error", result)
+		}
+	}
+}
+
+func TestGetTransactionCount(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getTransactionCount", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
+		`{"result": "0x2a"}`,
+	)
+	nonce, err := client.GetTransactionCount(t.Context(), Address{19: 0xaa}, 16)
+	if err != nil || nonce != 42 {
+		t.Errorf("GetTransactionCount: got %d and error %v, want 42", nonce, err)
 	}
 }
 
@@ -531,6 +567,48 @@ func TestTransient(t *testing.T) {
 	} {
 		if got := Transient(test.err); got != test.want {
 			t.Errorf("%s: Transient(%v) = %v, want %v", test.name, test.err, got, test.want)
+		}
+	}
+}
+
+func TestRevertedAndHalted(t *testing.T) {
+	// The answers of reth (Blast, dRPC), geth (PublicNode), and anvil to calls of
+	// contracts that revert or halt, and to calls that they don't run.
+	call := func(code int, message string) error {
+		return fmt.Errorf("eth_call: %w", &Error{Code: code, Message: message})
+	}
+	for _, test := range []struct {
+		name             string
+		err              error
+		reverted, halted bool
+	}{
+		{"revert", call(3, "execution reverted"), true, false},
+		{"revert by its code", call(3, "VM execution error"), true, false},
+		{"revert with a reason", call(-32000, "execution reverted: not allowed"), true, false},
+		{"reth invalid opcode", call(-32003, "EVM error: InvalidFEOpcode"), false, true},
+		{"reth out of gas", call(-32003, "out of gas: gas required exceeds: 50000000"), false, true},
+		{"reth stack underflow", call(-32003, "EVM error: StackUnderflow"), false, true},
+		{"geth invalid opcode", call(-32000, "invalid opcode: INVALID"), false, true},
+		{"geth out of gas", call(-32000, "out of gas"), false, true},
+		{"geth stack underflow", call(-32000, "stack underflow (0 <=> 2)"), false, true},
+		{"geth stack overflow", call(-32000, "stack limit reached 1024 (1023)"), false, true},
+		{"geth invalid jump", call(-32000, "invalid jump destination"), false, true},
+		{"geth return data", call(-32000, "return data out of bounds"), false, true},
+		{"anvil invalid opcode", call(-32603, "EVM error InvalidFEOpcode"), false, true},
+		{"missing block", call(-32000, "header not found"), false, false},
+		{"unsupported block", call(-32000, "unsupported block number"), false, false},
+		{"node timeout", call(-32000, "execution aborted (timeout = 5s)"), false, false},
+		{"rate limit", call(-32005, "out of gas credits, execution reverted"), false, false},
+		{"server error with a revert", fmt.Errorf("eth_call: %w", &HTTPError{Status: "500 Internal Server Error", StatusCode: 500, Err: &Error{Code: 3, Message: "execution reverted"}}), false, false},
+		{"server error with a halt", fmt.Errorf("eth_call: %w", &HTTPError{Status: "503 Service Unavailable", StatusCode: 503, Err: &Error{Code: -32003, Message: "EVM error: InvalidFEOpcode"}}), false, false},
+		{"not an RPC error", errors.New("execution reverted"), false, false},
+		{"nil", nil, false, false},
+	} {
+		if got := Reverted(test.err); got != test.reverted {
+			t.Errorf("%s: Reverted(%v) = %v, want %v", test.name, test.err, got, test.reverted)
+		}
+		if got := Halted(test.err); got != test.halted {
+			t.Errorf("%s: Halted(%v) = %v, want %v", test.name, test.err, got, test.halted)
 		}
 	}
 }
