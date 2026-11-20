@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/e2e"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
 	"github.com/safe-research/safenet-arbitration-bot/internal/functions"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
@@ -117,7 +119,7 @@ func TestExecutions(t *testing.T) {
 
 	// An execution after the proposal, which the evidence must not include.
 	mainnet.MineUntil(n.Header(r.Block).Time())
-	exec(safe, zero(safenet.SafeTransaction{To: target, Data: []byte("later")}), ethrpc.Address{}, "calldata", true)
+	later := exec(safe, zero(safenet.SafeTransaction{To: target, Data: []byte("later")}), ethrpc.Address{}, "calldata", true)
 
 	arbot := n.Arbot()
 	dir := t.TempDir()
@@ -236,6 +238,55 @@ func TestExecutions(t *testing.T) {
 		line := `(?m)^3 +1 +root +` + target.String() + ` +no code +CALL +0 +execTransaction > transfer$`
 		if !regexp.MustCompile(line).Match(text) {
 			t.Errorf("executions -calls: output has no line matching %q:\n%s", line, text)
+		}
+	})
+
+	t.Run("all", func(t *testing.T) {
+		// A service that lists the Safe's executions but the one through the forwarder,
+		// and the one after the proposal.
+		service := e2e.NewTxService(t)
+		for _, x := range []executionJSON{viaCalldata, failed, nested, later} {
+			service.ListExecutions(e2e.TxServiceExecution{Transaction: x.Transaction, SafeTxHash: x.SafeTxHash, TxHash: x.TxHash, Block: x.Block})
+		}
+		withService := arbot.WithTxService(t, ethrpc.Mainnet, service.URL)
+		out := withService.Run(t, "executions", "-json", "-all", "-request-file", path)
+		got := decode[historyOutput](t, out)
+		if _, ok := decode[map[string]any](t, out)["fromBlock"]; got.Safe != safe || ok || got.ToBlock != safeBlock {
+			t.Errorf("executions -all: got Safe %s up to block %d, want %s up to block %d without a first block", got.Safe, got.ToBlock, safe, safeBlock)
+		}
+		// The transactions that the service lists are taken from it, and the one that
+		// it doesn't list is found between those before and after it, and decoded from
+		// its trace.
+		fromService := func(x executionJSON) executionJSON {
+			x.Source = "service"
+			return x
+		}
+		want := []executionJSON{fromService(viaCalldata), viaTrace, fromService(failed), fromService(nested)}
+		if !reflect.DeepEqual(canonical(t, got.Executions), canonical(t, want)) {
+			g, _ := json.MarshalIndent(got.Executions, "", "  ")
+			w, _ := json.MarshalIndent(want, "", "  ")
+			t.Errorf("executions -all:\ngot  %s\nwant %s", g, w)
+		}
+		scanned := []executions.BlockRange{{FromBlock: viaCalldata.Block, ToBlock: failed.Block}}
+		if h := got.History; h.Service.URL != service.URL || h.Nonce == nil || h.Nonce.Int64() != 4 || !h.Complete || len(h.MissingNonces) != 0 ||
+			!reflect.DeepEqual(h.Scanned, scanned) || len(h.Rejected) != 0 {
+			t.Errorf("executions -all: got history %+v, want nonce 4, complete, with blocks %v scanned", h, scanned)
+		}
+		// Without -all, there is no history.
+		if out := withService.Run(t, "executions", "-json", "-request-file", path); strings.Contains(string(out), `"history"`) {
+			t.Errorf("executions without -all: output has a history")
+		}
+
+		text := withService.Run(t, "executions", "-all", "-request-file", path)
+		for _, want := range []string{
+			`(?m)^Safe transactions executed by ` + safe.String() + ` on chain 1, up to block \d+$`,
+			`(?m)^Nonce at block \d+: 4 \(complete\)$`,
+			fmt.Sprintf(`(?m)^Scanned blocks %d to %d for executions that the service doesn't list$`, viaCalldata.Block, failed.Block),
+			`(?m)^\d+ +` + viaTrace.TxHash.String() + ` +success +` + viaTrace.SafeTxHash.String() + ` +trace +1 +`,
+		} {
+			if !regexp.MustCompile(want).Match(text) {
+				t.Errorf("executions -all: output has no line matching %q:\n%s", want, text)
+			}
 		}
 	})
 

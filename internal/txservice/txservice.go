@@ -175,6 +175,25 @@ func (c *Client) known(ctx context.Context, safe ethrpc.Address) error {
 	return c.get(ctx, u+"/", &struct{}{})
 }
 
+// Creation returns the hash of the transaction that the service says created
+// the Safe, or ErrNotFound.
+func (c *Client) Creation(ctx context.Context, safe ethrpc.Address) (ethrpc.Hash, error) {
+	u, err := url.JoinPath(c.baseURL, "api", "v1", "safes", safe.String(), "creation")
+	if err != nil {
+		return ethrpc.Hash{}, err
+	}
+	var result struct {
+		TransactionHash *ethrpc.Hash `json:"transactionHash"`
+	}
+	if err := c.get(ctx, u+"/", &result); err != nil {
+		return ethrpc.Hash{}, err
+	}
+	if result.TransactionHash == nil {
+		return ethrpc.Hash{}, ErrNotFound
+	}
+	return *result.TransactionHash, nil
+}
+
 // get fetches the JSON document at u, and decodes it into v. It returns
 // ErrNotFound if the service doesn't have it.
 func (c *Client) get(ctx context.Context, u string, v any) error {
