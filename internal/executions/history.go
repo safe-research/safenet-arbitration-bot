@@ -152,7 +152,7 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	}
 
 	h := &History{Nonce: nonce, Scanned: []BlockRange{}, Rejected: []Rejected{}, Creation: creation}
-	for _, r := range f.gaps(ctx, c, transactions, nonce, to, creation) {
+	for _, r := range f.gaps(ctx, c, transactions, nonce, to, h) {
 		if _, err := c.scan(ctx, ethrpc.BlockNumber(r.FromBlock), ethrpc.BlockNumber(r.ToBlock)); err != nil {
 			f.warn(fmt.Errorf("scanning blocks %d to %d for executions that the Safe Transaction Service doesn't list: %w", r.FromBlock, r.ToBlock, err))
 			continue
@@ -284,9 +284,9 @@ func missing(executions []Execution, next uint64) []NonceRange {
 // by hash whose hashes check out. Each range is between the blocks of the
 // executions with the nonces before and after the missing ones, which are where
 // they must be, since nonces only increase. The range before the first
-// execution found starts at the Safe's creation, or, if it is unknown, at the
-// first block with the Safe's code.
-func (f *Finder) gaps(ctx context.Context, c *collector, transactions map[ethrpc.Hash]*safenet.SafeTransaction, nonce *big.Int, to ethrpc.BlockNumber, creation *Creation) []BlockRange {
+// execution found starts at the creation of h, or, if it is unknown, at the
+// first block with the Safe's code, which becomes its creation.
+func (f *Finder) gaps(ctx context.Context, c *collector, transactions map[ethrpc.Hash]*safenet.SafeTransaction, nonce *big.Int, to ethrpc.BlockNumber, h *History) []BlockRange {
 	if !nonce.IsInt64() {
 		f.warn(fmt.Errorf("the Safe's nonce %s is too large to find the executions that it doesn't have", nonce))
 		return nil
@@ -325,7 +325,7 @@ func (f *Finder) gaps(ctx context.Context, c *collector, transactions map[ethrpc
 		if n > prev+1 && prevBlock <= blocks[n] {
 			from, ok := prevBlock, true
 			if prev == -1 {
-				from, ok = f.firstBlock(ctx, c.safe, ethrpc.BlockNumber(blocks[n]), creation)
+				from, ok = f.firstBlock(ctx, c.safe, ethrpc.BlockNumber(blocks[n]), h)
 			}
 			if ok && from <= blocks[n] {
 				ranges = append(ranges, BlockRange{FromBlock: from, ToBlock: blocks[n]})
@@ -336,19 +336,21 @@ func (f *Finder) gaps(ctx context.Context, c *collector, transactions map[ethrpc
 	return ranges
 }
 
-// firstBlock returns the block that the Safe's history starts at: its creation,
-// if known, or else the first block, up to to, at which it has code, which a
-// Safe proxy has from its deployment on. It warns and returns false if it can't
-// find it.
-func (f *Finder) firstBlock(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber, creation *Creation) (uint64, bool) {
-	if creation != nil {
-		return creation.Block, true
+// firstBlock returns the block that the Safe's history starts at: the block of
+// the creation of h, if known, or else the first block, up to to, at which it
+// has code, which a Safe proxy has from its deployment on, and which it sets as
+// the creation's. It warns and returns false if it can't find it.
+func (f *Finder) firstBlock(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber, h *History) (uint64, bool) {
+	if h.Creation != nil {
+		return h.Creation.Block, true
 	}
 	block, err := f.deployment(ctx, safe, to)
 	if err != nil {
 		f.warn(fmt.Errorf("finding the block that %s was deployed in: %w", safe, err))
 		return 0, false
 	}
+	// The code confirms the block, but no transaction.
+	h.Creation = &Creation{Block: block}
 	return block, true
 }
 
@@ -400,10 +402,10 @@ type Creation struct {
 // account has no code at the block before it, and has code at its block. The
 // creation has the transaction only if the chain binds it to the account, and
 // warns if it doesn't. It returns nil if the service doesn't have the creation,
-// and nil with a warning if the service fails or the chain doesn't confirm its
-// block, such as for a node that doesn't serve the code at old blocks. It fails
-// if a node request fails transiently, such as for a rate limit, since that
-// says nothing about the creation.
+// and nil with a warning if the service refuses the request or the chain
+// doesn't confirm its block, such as for a node that doesn't serve the code at
+// old blocks. It fails if a request to the service or a node fails transiently,
+// such as for a rate limit, since that says nothing about the creation.
 func (f *Finder) CreationFromService(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber) (*Creation, error) {
 	if f.Service == nil {
 		return nil, nil
@@ -411,6 +413,9 @@ func (f *Finder) CreationFromService(ctx context.Context, safe ethrpc.Address, t
 	hash, err := f.Service.Creation(ctx, safe)
 	if errors.Is(err, txservice.ErrNotFound) {
 		return nil, nil
+	}
+	if txservice.Unavailable(err) {
+		return nil, fmt.Errorf("getting the creation of %s from the Safe Transaction Service: %w", safe, err)
 	}
 	if err != nil {
 		f.warn(fmt.Errorf("getting the creation of %s from the Safe Transaction Service: %w", safe, err))

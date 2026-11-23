@@ -49,7 +49,7 @@ type historyReport struct {
 	// confirm.
 	Rejected []executions.Rejected `json:"rejected"`
 	// Creation is the creation of the Safe's account, if the service has it and the
-	// chain confirms its block, or null.
+	// chain confirms its block, or a scan needed its block, or null.
 	Creation *executions.Creation `json:"creation"`
 }
 
@@ -122,13 +122,14 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "blocks between the executions before and after them, from the Safe's creation, or up to the Safe\n")
 		fmt.Fprintf(out, "block, and reports the ranges, then the nonces still missing. A scan that fails, such as one that a\n")
 		fmt.Fprintf(out, "public node times out, is a warning, and leaves its nonces missing. The history is complete if none\n")
-		fmt.Fprintf(out, "are. A Safe that the service doesn't know is a warning, and the scans look for all of its executions.\n")
+		fmt.Fprintf(out, "are, and the nonces of the executions found don't show that a delegate call set the nonce back. A Safe\n")
+		fmt.Fprintf(out, "that the service doesn't know is a warning, and the scans look for all of its executions.\n")
 		fmt.Fprintf(out, "Executions by modules don't use nonces, and the service doesn't list them, so they aren't listed.\n\n")
-		fmt.Fprintf(out, "It also reports the block that created the Safe's account, if the service names the transaction and\n")
-		fmt.Fprintf(out, "the chain confirms that the account got its code in that block, which needs a node that serves the\n")
-		fmt.Fprintf(out, "code at old blocks. The transaction itself is only reported if it is bound to the account: its receipt\n")
-		fmt.Fprintf(out, "names the account as the contract that it created, or has the account's ProxyCreation event from an\n")
-		fmt.Fprintf(out, "official proxy factory.\n\n")
+		fmt.Fprintf(out, "It also reports the block that created the Safe's account, if the service names the transaction and the\n")
+		fmt.Fprintf(out, "chain confirms that the account got its code in that block, which needs a node that serves the code at\n")
+		fmt.Fprintf(out, "old blocks, or else, if a scan starts at it, the first block with the Safe's code. The transaction\n")
+		fmt.Fprintf(out, "itself is only reported if it is bound to the account: its receipt names the account as the contract\n")
+		fmt.Fprintf(out, "that it created, or has the account's ProxyCreation event from an official proxy factory.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
