@@ -322,8 +322,8 @@ func TestTransfersAll(t *testing.T) {
 		t.Fatalf("transfers -all: exit status %d\n%s", code, stderr.String())
 	}
 	matchLines(t, "transfers -all", stdout.Bytes(),
-		`^ERC-20 transfers from `+historySafe.String()+` on chain 1, up to block 200, in the 2 blocks with transfers that the Safe Transaction Service lists$`,
-		`^The service lists 2 such transfers, of which 1 aren't in the logs of their blocks\.$`,
+		`^ERC-20 transfers from `+historySafe.String()+` on chain 1, up to block 200, in the blocks with transfers that the Safe Transaction Service lists: 2$`,
+		`^Listed by the Safe Transaction Service "`+regexp.QuoteMeta(serviceURL)+`", observed \S+Z: 2, not in the logs of their blocks: 1$`,
 		`^100 +`+hashOf(1).String()+` +`,
 	)
 
@@ -333,6 +333,46 @@ func TestTransfersAll(t *testing.T) {
 	if code := Run(t.Context(), []string{"arbot", "-config", config, "transfers", "-all", "-request-file", request}, &stdout, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "-all needs the Safe Transaction Service of chain 1") {
 		t.Errorf("transfers -all without a service: got status %d, stderr %q; want 1 and an error about the service", code, stderr.String())
+	}
+}
+
+func TestTransfersAllUnmatchedOnce(t *testing.T) {
+	// The service lists two native transfers of the same value in one transaction,
+	// of which only one has a SafeReceived event, and an ERC-20 transfer whose ID
+	// has another log index than the transfer that the logs have.
+	value := solabi.Uint(big.NewInt(7))
+	chain := &historyChain{logs: []ethrpc.Log{
+		transferLog(historyAlice, historySafe, 6, hashOf(3), 120, 0),
+		{
+			Address: historySafe, Topics: []ethrpc.Hash{solabi.Event("SafeReceived(address,uint256)"), solabi.Address(historyAlice)},
+			Data: value[:], BlockNumber: 130, TransactionHash: hashOf(5), LogIndex: 1,
+		},
+	}}
+	erc20 := listedTransfer(historyAlice, historySafe, "6", hashOf(3), 120)
+	erc20["transferId"] = "e" + hashOf(3).String()[2:] + "4"
+	native := map[string]any{
+		"type": "ETHER_TRANSFER", "blockNumber": 130, "transactionHash": hashOf(5), "tokenAddress": nil,
+		"from": historyAlice, "to": historySafe, "value": "7", "transferId": "i" + hashOf(5).String()[2:] + "0",
+	}
+	service := &historyService{transfers: []map[string]any{erc20, native, native}}
+	config, request := historyFiles(t, chain.serve(t), service.serve(t))
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(t.Context(), []string{"arbot", "-config", config, "transfers", "-all", "-in", "-json", "-request-file", request}, &stdout, &stderr); code != 0 {
+		t.Fatalf("transfers -all -in: exit status %d\n%s", code, stderr.String())
+	}
+	var got struct {
+		Service struct {
+			Listed    int `json:"listed"`
+			Unmatched int `json:"unmatched"`
+		} `json:"service"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("transfers -all -in: %v\n%s", err, stdout.String())
+	}
+	// Each log matches one transfer that the service lists, at its log index.
+	if got.Service.Listed != 3 || got.Service.Unmatched != 2 {
+		t.Errorf("transfers -all -in: got %d listed and %d unmatched, want 3 and 2", got.Service.Listed, got.Service.Unmatched)
 	}
 }
 

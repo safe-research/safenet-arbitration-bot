@@ -185,8 +185,8 @@ func TestTransfers(t *testing.T) {
 		}
 		text := withService.Run(t, "transfers", "-all", "-request-file", path)
 		for _, want := range []string{
-			fmt.Sprintf(`(?m)^ERC-20 transfers from %s on chain 1, up to block %d, in the 2 blocks with transfers that the Safe Transaction Service lists$`, safe, safeBlock),
-			`(?m)^The service lists 3 such transfers, of which 1 aren't in the logs of their blocks\.$`,
+			fmt.Sprintf(`(?m)^ERC-20 transfers from %s on chain 1, up to block %d, in the blocks with transfers that the Safe Transaction Service lists: 2$`, safe, safeBlock),
+			`(?m)^Listed by the Safe Transaction Service "` + regexp.QuoteMeta(service.URL) + `", observed \S+Z: 3, not in the logs of their blocks: 1$`,
 		} {
 			if !regexp.MustCompile(want).Match(text) {
 				t.Errorf("transfers -all: output has no line matching %q:\n%s", want, text)

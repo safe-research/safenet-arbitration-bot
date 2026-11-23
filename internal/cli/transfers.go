@@ -220,7 +220,10 @@ func transfers(ctx context.Context, e *env, args []string) error {
 			found[x.TxHash] = append(found[x.TxHash], x)
 		}
 		for _, t := range listed {
-			if !slices.ContainsFunc(found[t.TxHash], func(x transfer) bool { return x.matches(t) }) {
+			// Each transfer in the logs matches at most one that the service lists.
+			if i := slices.IndexFunc(found[t.TxHash], func(x transfer) bool { return x.matches(t) }); i >= 0 {
+				found[t.TxHash] = slices.Delete(found[t.TxHash], i, i+1)
+			} else {
 				report.Service.Unmatched++
 				fmt.Fprintf(e.stderr, "%s: warning: the Safe Transaction Service lists a transfer of %s from %s to %s in transaction %s, in block %d, that the logs of the block don't have\n",
 					e.progname, t.Value, t.From, t.To, t.TxHash, t.Block)
@@ -238,7 +241,7 @@ func transfers(ctx context.Context, e *env, args []string) error {
 	}
 	var blockRange string
 	if s := report.Service; s != nil {
-		blockRange = fmt.Sprintf("up to block %d, in the %d blocks with transfers that the Safe Transaction Service lists", report.ToBlock, s.Blocks)
+		blockRange = fmt.Sprintf("up to block %d, in the blocks with transfers that the Safe Transaction Service lists: %d", report.ToBlock, s.Blocks)
 	} else {
 		blockRange = fmt.Sprintf("in blocks %d to %d", *report.FromBlock, report.ToBlock)
 	}
@@ -255,7 +258,8 @@ func transfers(ctx context.Context, e *env, args []string) error {
 	}
 	fmt.Fprintf(e.stdout, "\n\n")
 	if s := report.Service; s != nil {
-		fmt.Fprintf(e.stdout, "The service lists %d such transfers, of which %d aren't in the logs of their blocks.\n\n", s.Listed, s.Unmatched)
+		fmt.Fprintf(e.stdout, "Listed by the Safe Transaction Service %q, observed %s: %d, not in the logs of their blocks: %d\n\n",
+			s.URL, s.ObservedAt.Format(time.RFC3339), s.Listed, s.Unmatched)
 	}
 	if len(report.Transfers) == 0 {
 		_, err = fmt.Fprintln(e.stdout, "none")
@@ -298,8 +302,8 @@ var serviceTypes = map[string]string{"erc20": "ERC20_TRANSFER", "native": "ETHER
 // matches reports whether x is the transfer t that the Safe Transaction Service
 // lists.
 func (x *transfer) matches(t txservice.Transfer) bool {
-	return serviceTypes[x.Type] == t.Type && x.Block == t.Block && x.TxHash == t.TxHash && x.From == t.From && x.To == t.To &&
-		(x.Token == nil) == (t.Token == nil) && (x.Token == nil || *x.Token == *t.Token) &&
+	return serviceTypes[x.Type] == t.Type && x.Block == t.Block && x.TxHash == t.TxHash && (t.LogIndex == nil || x.LogIndex == *t.LogIndex) &&
+		x.From == t.From && x.To == t.To && (x.Token == nil) == (t.Token == nil) && (x.Token == nil || *x.Token == *t.Token) &&
 		t.Value != nil && x.Value.Cmp(t.Value) == 0
 }
 

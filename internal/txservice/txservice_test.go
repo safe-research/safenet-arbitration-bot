@@ -552,4 +552,54 @@ func TestTransfersErrors(t *testing.T) {
 		errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "500") {
 		t.Errorf("Transfers from a failing service: got error %v, want one with the status", err)
 	}
+	// The service lists nothing for a Safe that it doesn't know, so a listing that
+	// isn't found is at a wrong URL.
+	server = httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000}); err == nil ||
+		errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "404") {
+		t.Errorf("Transfers at a wrong URL: got error %v, want one with the status", err)
+	}
+}
+
+func TestTransfersShortPages(t *testing.T) {
+	// A service that lists fewer transfers than it is asked for, as one with a
+	// smaller maximum page does, says that there are more with its next link.
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	const perPage = 100
+	var transfers []map[string]any
+	for b := uint64(1000); b < 1500; b++ {
+		transfers = append(transfers, transferAt("ERC20_TRANSFER", b, ethrpc.Hash{30: byte(b >> 8), 31: byte(b)}, &safe, safe, safe, "1"))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		latest := time.Unix(1<<40, 0)
+		if q := r.URL.Query(); q.Has("execution_date__lte") {
+			latest, _ = time.Parse(time.RFC3339, q.Get("execution_date__lte"))
+		}
+		results := []map[string]any{}
+		for i := len(transfers) - 1; i >= 0; i-- {
+			if d, _ := time.Parse(time.RFC3339, transfers[i]["executionDate"].(string)); !d.After(latest) {
+				results = append(results, transfers[i])
+			}
+		}
+		var next any
+		if len(results) > perPage {
+			next = "https://example.invalid/next"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"count": len(results), "next": next, "results": results[:min(len(results), perPage)]})
+	}))
+	t.Cleanup(server.Close)
+	got, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000})
+	if err != nil || len(got) != len(transfers) {
+		t.Errorf("Transfers: got %d transfers and error %v, want %d", len(got), err, len(transfers))
+	}
+	// More transfers at one time than such a service lists at once.
+	transfers = nil
+	for i := range 150 {
+		transfers = append(transfers, transferAt("ERC20_TRANSFER", 1000, ethrpc.Hash{30: byte(i >> 8), 31: byte(i)}, &safe, safe, safe, "1"))
+	}
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000}); err == nil ||
+		!strings.Contains(err.Error(), "100 transfers or more at 1970-01-01T00:04:10Z") {
+		t.Errorf("Transfers of a full second: got error %v, want one about the 100 at that second", err)
+	}
 }

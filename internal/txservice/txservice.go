@@ -9,6 +9,7 @@ package txservice
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -165,6 +167,9 @@ type Transfer struct {
 	Type   string
 	Block  uint64
 	TxHash ethrpc.Hash
+	// LogIndex is the index in its block of the log of an ERC-20 transfer, from the
+	// service's ID of the transfer, or nil if the ID doesn't have it.
+	LogIndex *uint64
 	// Token is the token's contract, or nil for the native currency.
 	Token *ethrpc.Address
 	From  ethrpc.Address
@@ -224,6 +229,7 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 			query.Set("execution_date__lte", before.UTC().Format(time.RFC3339Nano))
 		}
 		var page struct {
+			Next    *string `json:"next"`
 			Results []struct {
 				Type            string          `json:"type"`
 				BlockNumber     uint64          `json:"blockNumber"`
@@ -233,9 +239,10 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 				To              ethrpc.Address  `json:"to"`
 				Value           *number         `json:"value"`
 				ExecutionDate   time.Time       `json:"executionDate"`
+				TransferID      string          `json:"transferId"`
 			} `json:"results"`
 		}
-		if err := c.get(ctx, base+"/?"+query.Encode(), &page); err != nil {
+		if err := c.getListing(ctx, base+"/?"+query.Encode(), &page); err != nil {
 			return nil, err
 		}
 		var oldest time.Time
@@ -247,7 +254,9 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 				oldest = r.ExecutionDate
 			}
 		}
-		full := len(page.Results) == transferPage
+		// A service can list fewer transfers than it is asked for, and then has a next
+		// page.
+		full := len(page.Results) == transferPage || page.Next != nil
 		listed := len(transfers)
 		for _, r := range page.Results {
 			if full && r.ExecutionDate.Equal(oldest) {
@@ -257,10 +266,17 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 			if r.Value != nil {
 				t.Value = r.Value.Int
 			}
+			// The ID of a transfer that a log shows is "e", the transaction hash in hex,
+			// and the log index.
+			if index, ok := strings.CutPrefix(r.TransferID, "e"+hex.EncodeToString(r.TransactionHash[:])); ok {
+				if n, err := strconv.ParseUint(index, 10, 64); err == nil {
+					t.LogIndex = &n
+				}
+			}
 			transfers = append(transfers, t)
 		}
 		if full && len(transfers) == listed {
-			return nil, fmt.Errorf("the service lists %d transfers or more at %s, more than it lists at once", transferPage, oldest.Format(time.RFC3339))
+			return nil, fmt.Errorf("the service lists %d transfers or more at %s, more than it lists at once", len(page.Results), oldest.Format(time.RFC3339))
 		}
 		if len(transfers) > maxListed {
 			return nil, fmt.Errorf("the service lists more than %d transfers", maxListed)
