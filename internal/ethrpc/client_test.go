@@ -266,7 +266,7 @@ func TestGetBalance(t *testing.T) {
 		t.Errorf("GetBalance: got %s, want %s", balance, want)
 	}
 
-	for _, result := range []string{`"1000"`, `"0x"`, `"0xg"`, `"0x-1"`, `"0x+1"`, `16`} {
+	for _, result := range []string{`"1000"`, `"0x"`, `"0xg"`, `"0x-1"`, `"0x+1"`, `16`, `null`} {
 		client := serve(t,
 			`{"jsonrpc": "2.0", "method": "eth_getBalance", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`,
 			`{"result": `+result+`}`,
@@ -285,6 +285,15 @@ func TestGetTransactionCount(t *testing.T) {
 	nonce, err := client.GetTransactionCount(t.Context(), Address{19: 0xaa}, 16)
 	if err != nil || nonce != 42 {
 		t.Errorf("GetTransactionCount: got %d and error %v, want 42", nonce, err)
+	}
+
+	request := `{"jsonrpc": "2.0", "method": "eth_getTransactionCount", "params": ["0x00000000000000000000000000000000000000aa", "0x10"]}`
+	if nonce, err := serve(t, request, `{"result": "0x0"}`).GetTransactionCount(t.Context(), Address{19: 0xaa}, 16); err != nil || nonce != 0 {
+		t.Errorf("GetTransactionCount of 0x0: got %d and error %v, want 0", nonce, err)
+	}
+	// A null result isn't a nonce of zero.
+	if nonce, err := serve(t, request, `{"result": null}`).GetTransactionCount(t.Context(), Address{19: 0xaa}, 16); err == nil {
+		t.Errorf("GetTransactionCount of null: got %d, expected an error", nonce)
 	}
 }
 

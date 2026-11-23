@@ -31,9 +31,10 @@ type accountReport struct {
 
 // tokenReport is an ERC-20 token in the output of `arbot account`.
 type tokenReport struct {
-	Name     string `json:"name"`
-	Symbol   string `json:"symbol"`
-	Decimals uint8  `json:"decimals"`
+	Name   string `json:"name"`
+	Symbol string `json:"symbol"`
+	// Decimals is nil if the token doesn't return its decimals.
+	Decimals *uint8 `json:"decimals"`
 	// TotalSupply is the total supply that the token returns, in its smallest unit,
 	// or nil if it doesn't return one.
 	TotalSupply *big.Int `json:"totalSupply"`
@@ -62,12 +63,13 @@ func accountCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "size, as arbot calls shows the accounts that a Safe calls, with whether it is the Safe itself and the\n")
 		fmt.Fprintf(out, "contract of a § 2.1 Safe version that it is, if any, its balance of the native currency in wei, and\n")
 		fmt.Fprintf(out, "its nonce.\n\n")
-		fmt.Fprintf(out, "If the account answers decimals() and balanceOf(address) as an ERC-20 token does, it also shows\n")
-		fmt.Fprintf(out, "the name, symbol, decimals, and total supply that it returns, and the Safe's balance of it in its\n")
-		fmt.Fprintf(out, "smallest unit, and with -spender, the Safe's allowance of it to the spender. Any contract can return\n")
-		fmt.Fprintf(out, "any name and symbol, so they say what the contract claims to be, not what it is. The name and symbol\n")
-		fmt.Fprintf(out, "are empty if it doesn't return strings for them, and the total supply is \"-\" if it doesn't return\n")
-		fmt.Fprintf(out, "one. A contract whose calls revert or halt, such as on an invalid opcode, isn't a token.\n\n")
+		fmt.Fprintf(out, "If the account answers balanceOf(address), and decimals() or else allowance(address,address), which\n")
+		fmt.Fprintf(out, "an ERC-721 token doesn't have, as an ERC-20 token does, it also shows the name, symbol, decimals, and\n")
+		fmt.Fprintf(out, "total supply that it returns, and the Safe's balance of it in its smallest unit, and with -spender,\n")
+		fmt.Fprintf(out, "the Safe's allowance of it to the spender. Any contract can return any name and symbol, so they say\n")
+		fmt.Fprintf(out, "what the contract claims to be, not what it is. The name and symbol are empty if it doesn't return\n")
+		fmt.Fprintf(out, "strings for them, and the decimals and total supply are \"-\" if it doesn't return them. A contract\n")
+		fmt.Fprintf(out, "whose calls revert or halt, such as on an invalid opcode, isn't a token.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 1); err != nil {
@@ -89,7 +91,7 @@ func accountCommand(ctx context.Context, e *env, args []string) error {
 		return usageError(fmt.Sprintf("-block %d is after the request's Safe block %d", *blockFlag, safe.SafeBlock))
 	}
 	report := accountReport{ChainID: safe.ChainID, SafeBlock: safe.SafeBlock, Block: safe.SafeBlock, Safe: safe.Safe}
-	if *blockFlag != 0 {
+	if isSet(flags, "block") {
 		report.Block = *blockFlag
 	}
 	block := ethrpc.BlockNumber(report.Block)
@@ -145,7 +147,11 @@ func accountCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(e.stdout, "\nERC-20 token\n")
 		fmt.Fprintf(e.stdout, "  Name          %q\n", t.Name)
 		fmt.Fprintf(e.stdout, "  Symbol        %q\n", t.Symbol)
-		fmt.Fprintf(e.stdout, "  Decimals      %d\n", t.Decimals)
+		if t.Decimals != nil {
+			fmt.Fprintf(e.stdout, "  Decimals      %d\n", *t.Decimals)
+		} else {
+			fmt.Fprintf(e.stdout, "  Decimals      -\n")
+		}
 		if t.TotalSupply != nil {
 			fmt.Fprintf(e.stdout, "  Total supply  %s\n", t.TotalSupply)
 		} else {

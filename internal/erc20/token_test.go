@@ -101,13 +101,18 @@ func TestRead(t *testing.T) {
 		balanceOfSelector: solabi.Encode(big.NewInt(0)),
 		symbolSelector:    symbol[:],
 	}}
-	eth := callNode(t, map[ethrpc.Address]contract{tokenA: token, tokenB: tokenWithoutStrings})
+	// A token without decimals, which are optional, but with an allowance.
+	tokenWithoutDecimals := contract{results: map[[4]byte][]byte{
+		balanceOfSelector: solabi.Encode(uint64(3)),
+		allowanceSelector: solabi.Encode(uint64(0)),
+	}}
+	eth := callNode(t, map[ethrpc.Address]contract{tokenA: token, tokenB: tokenWithoutStrings, alice: tokenWithoutDecimals})
 
 	got, err := Read(t.Context(), eth, tokenA, safe, 100)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got == nil || got.Name != "Token \x1b[31mA" || got.Symbol != "TKA" || got.Decimals != 18 || got.Balance.Cmp(balance) != 0 ||
+	if got == nil || got.Name != "Token \x1b[31mA" || got.Symbol != "TKA" || got.Decimals == nil || *got.Decimals != 18 || got.Balance.Cmp(balance) != 0 ||
 		got.TotalSupply == nil || got.TotalSupply.Int64() != 1e9 {
 		t.Errorf("Read: got %+v, want the token's name, symbol, 18 decimals, total supply 1e9, and balance %s", got, balance)
 	}
@@ -115,8 +120,15 @@ func TestRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got == nil || got.Name != "" || got.Symbol != "" || got.Decimals != 6 || got.Balance.Sign() != 0 || got.TotalSupply != nil {
+	if got == nil || got.Name != "" || got.Symbol != "" || got.Decimals == nil || *got.Decimals != 6 || got.Balance.Sign() != 0 || got.TotalSupply != nil {
 		t.Errorf("Read of a token without strings: got %+v, want no name, symbol, or total supply, 6 decimals, and no balance", got)
+	}
+	got, err = Read(t.Context(), eth, alice, safe, 100)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got == nil || got.Decimals != nil || got.Balance.Int64() != 3 {
+		t.Errorf("Read of a token without decimals: got %+v, want no decimals and a balance of 3", got)
 	}
 }
 
@@ -145,20 +157,24 @@ func TestAllowance(t *testing.T) {
 }
 
 func TestReadNotAToken(t *testing.T) {
-	invalid, loop := ethrpc.Address{19: 0xfe}, ethrpc.Address{19: 0x5b}
+	invalid, loop, nft := ethrpc.Address{19: 0xfe}, ethrpc.Address{19: 0x5b}, ethrpc.Address{19: 0x72}
 	eth := callNode(t, map[ethrpc.Address]contract{
 		// A contract whose calls revert.
 		tokenA: {results: map[[4]byte][]byte{}},
 		// A contract with decimals, but no balanceOf.
 		tokenB: {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode(uint64(18))}},
-		// A contract whose decimals don't fit in a uint8.
+		// A contract whose decimals don't fit in a uint8, and an ERC-721 token, which
+		// has a balanceOf, but neither decimals nor an allowance.
 		alice: {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode(uint64(256)), balanceOfSelector: solabi.Encode(uint64(1))}},
+		nft: {results: map[[4]byte][]byte{
+			balanceOfSelector: solabi.Encode(uint64(2)), totalSupplySelector: solabi.Encode(uint64(10_000)), symbolSelector: solabi.Encode("NFT"),
+		}},
 		// Contracts whose code is the invalid opcode 0xfe, and a loop that runs out of
 		// gas.
 		invalid: {halt: "EVM error: InvalidFEOpcode"},
 		loop:    {halt: "out of gas: gas required exceeds: 50000000"},
 	})
-	for _, account := range []ethrpc.Address{tokenA, tokenB, alice, bob, invalid, loop} {
+	for _, account := range []ethrpc.Address{tokenA, tokenB, alice, bob, invalid, loop, nft} {
 		if got, err := Read(t.Context(), eth, account, safe, 100); got != nil || err != nil {
 			t.Errorf("Read(%s): got %+v and error %v, want nil", account, got, err)
 		}

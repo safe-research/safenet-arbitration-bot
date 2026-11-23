@@ -132,9 +132,14 @@ func (c *Client) GetBalance(ctx context.Context, address Address, block BlockNum
 // that it sent, or contracts that it created if it is a contract, as of block
 // (eth_getTransactionCount).
 func (c *Client) GetTransactionCount(ctx context.Context, address Address, block BlockNumber) (uint64, error) {
-	var result Quantity
-	err := c.RawRequest(ctx, &result, "eth_getTransactionCount", address, block)
-	return uint64(result), err
+	var result *Quantity
+	if err := c.RawRequest(ctx, &result, "eth_getTransactionCount", address, block); err != nil {
+		return 0, err
+	}
+	if result == nil {
+		return 0, fmt.Errorf("eth_getTransactionCount: null result for %s", address)
+	}
+	return uint64(*result), nil
 }
 
 // GetStorageAt returns the value of the storage slot of the contract at address

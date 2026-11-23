@@ -163,6 +163,7 @@ func TestAccount(t *testing.T) {
 		}}
 	}
 	node := &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{
+		0:   {},
 		150: {stateToken: token(10)},
 		200: {stateToken: token(40), stateEOA: {balance: 7, nonce: 3}, stateSafe: {code: stateSafeProxy}},
 	}}
@@ -183,7 +184,9 @@ func TestAccount(t *testing.T) {
 			t.Fatalf("account %v: got status %d, stderr %q", args, code, stderr)
 		}
 		var got output
-		json.Unmarshal([]byte(stdout), &got)
+		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+			t.Fatalf("decoding account %v: %v", args, err)
+		}
 		return got
 	}
 
@@ -200,6 +203,10 @@ func TestAccount(t *testing.T) {
 	}
 	if got := run(stateSafe.String()); !got.Self || got.CodeSize == 0 || string(got.ERC20) != "null" {
 		t.Errorf("account of the Safe: got %+v, want the Safe itself, which isn't a token", got)
+	}
+	// Block 0 is read like any other, before the token had code.
+	if got := run("-block", "0", stateToken.String()); got.Block != 0 || got.CodeSize != 0 || string(got.ERC20) != "null" {
+		t.Errorf("account -block 0: got %+v, want block 0, without code or a token", got)
 	}
 	// The Safe block itself can be read, and the block after it can't.
 	if got := run("-block", "200", stateToken.String()); got.Block != 200 {
@@ -258,9 +265,11 @@ func TestAccountTransientError(t *testing.T) {
 	// So does a node that fails any one of the reads of a token.
 	token := stateAccount{code: ethrpc.Bytes{0x60, 0x00}, calls: map[string]ethrpc.Bytes{
 		"313ce567": solabi.Encode(uint64(6)), "70a08231": solabi.Encode(uint64(1)), "06fdde03": solabi.Encode("Token"),
-		"18160ddd": solabi.Encode(uint64(1)), "dd62ed3e": solabi.Encode(uint64(1)),
+		"95d89b41": solabi.Encode("TKN"), "18160ddd": solabi.Encode(uint64(1)), "dd62ed3e": solabi.Encode(uint64(1)),
 	}}
-	for _, failing := range []string{"eth_getBalance", "eth_getTransactionCount", "313ce567", "06fdde03", "18160ddd", "dd62ed3e"} {
+	for _, failing := range []string{
+		"eth_getBalance", "eth_getTransactionCount", "313ce567", "70a08231", "06fdde03", "95d89b41", "18160ddd", "dd62ed3e",
+	} {
 		node := &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{200: {stateToken: token}}, failing: failing}
 		config, request := stateFiles(t, node.serve(t))
 		code, stdout, stderr := runArbot(t, "-config", config, "account", "-spender", stateEOA.String(), "-request-file", request, stateToken.String())

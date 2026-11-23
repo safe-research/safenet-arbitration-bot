@@ -25,9 +25,11 @@ var (
 type Token struct {
 	// Name and Symbol are empty if the contract doesn't return a string for them,
 	// since they are optional in ERC-20.
-	Name     string
-	Symbol   string
-	Decimals uint8
+	Name   string
+	Symbol string
+	// Decimals is nil if the contract doesn't return its decimals, which are
+	// optional in ERC-20 too.
+	Decimals *uint8
 	// TotalSupply is the total supply that the contract returns, in the token's
 	// smallest unit, or nil if it doesn't return one.
 	TotalSupply *big.Int
@@ -37,24 +39,33 @@ type Token struct {
 
 // Read calls the ERC-20 view functions of the account token as of block, for
 // its name, symbol, decimals, total supply, and the balance of holder. It
-// returns nil if the account doesn't answer decimals and balanceOf as an ERC-20
-// token does, such as an account without code, or one whose calls revert or
-// halt.
+// returns nil if the account doesn't answer balanceOf, and decimals or else
+// allowance, as an ERC-20 token does, such as an account without code, or one
+// whose calls revert or halt.
 func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address, block ethrpc.BlockNumber) (*Token, error) {
 	d, ok, err := call(ctx, eth, token, block, solabi.Call(decimalsSelector))
-	if err != nil || !ok {
+	if err != nil {
 		return nil, err
 	}
-	decimals := d.Uint64(0)
-	if d.Err() != nil || decimals > 255 {
-		return nil, nil
+	var decimals *uint8
+	if ok {
+		if n := d.Uint64(0); d.Err() == nil && n <= 255 {
+			decimals = new(uint8(n))
+		}
 	}
 	if d, ok, err = call(ctx, eth, token, block, solabi.Call(balanceOfSelector, holder)); err != nil || !ok {
 		return nil, err
 	}
-	t := &Token{Decimals: uint8(decimals), Balance: d.Uint(0)}
+	t := &Token{Decimals: decimals, Balance: d.Uint(0)}
 	if d.Err() != nil {
 		return nil, nil
+	}
+	// An ERC-721 token answers balanceOf too, but has no allowance, which ERC-20
+	// requires, so a contract without decimals must answer it.
+	if decimals == nil {
+		if allowance, err := Allowance(ctx, eth, token, holder, holder, block); err != nil || allowance == nil {
+			return nil, err
+		}
 	}
 	for _, s := range []struct {
 		selector [4]byte

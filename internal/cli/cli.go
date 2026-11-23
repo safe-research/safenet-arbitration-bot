@@ -138,3 +138,11 @@ func parse(flags *flag.FlagSet, args []string, n int) error {
 	}
 	return nil
 }
+
+// isSet reports whether the flag name was set, which tells a zero that was set
+// from the default.
+func isSet(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
+}
