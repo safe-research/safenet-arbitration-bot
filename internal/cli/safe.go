@@ -16,7 +16,7 @@ type safeReport struct {
 	SafeBlock uint64         `json:"safeBlock"`
 	// Block is the block that the settings are read as of with -block, and is left
 	// out without it, when they are read as of the Safe block.
-	Block uint64 `json:"block,omitempty"`
+	Block *uint64 `json:"block,omitempty"`
 	*safesettings.Settings
 }
 
@@ -59,10 +59,11 @@ func safeCommand(ctx context.Context, e *env, args []string) error {
 		return usageError(fmt.Sprintf("-block %d is after the request's Safe block %d", *blockFlag, safe.SafeBlock))
 	}
 
-	report := safeReport{Safe: safe.Safe, ChainID: safe.ChainID, SafeBlock: safe.SafeBlock, Block: *blockFlag}
+	report := safeReport{Safe: safe.Safe, ChainID: safe.ChainID, SafeBlock: safe.SafeBlock}
 	block := safe.SafeBlock
-	if *blockFlag != 0 {
+	if isSet(flags, "block") {
 		block = *blockFlag
+		report.Block = &block
 	}
 	if address != nil {
 		report.Safe = *address
@@ -70,7 +71,7 @@ func safeCommand(ctx context.Context, e *env, args []string) error {
 	// Without flags, the request's Safe is read without being identified first.
 	// Another account, or another block, is only read if it is a Safe whose storage
 	// has settings.
-	if address != nil || *blockFlag != 0 {
+	if address != nil || report.Block != nil {
 		account, err := checks.NewCallReader(safe.eth, report.Safe, ethrpc.BlockNumber(block)).Safe(ctx)
 		if err != nil {
 			return fmt.Errorf("reading the code of %s at block %d: %w", report.Safe, block, err)

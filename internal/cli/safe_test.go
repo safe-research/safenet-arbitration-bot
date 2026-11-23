@@ -74,6 +74,7 @@ func TestSafeAddressAndBlock(t *testing.T) {
 	// The Safe added an owner and raised its threshold between blocks 150 and 200.
 	// The other Safe shares an owner with it, and is only deployed after block 150.
 	node := &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{
+		0:   {},
 		150: {stateSafe: safeAccount(1, 4, shared)},
 		200: {
 			stateSafe:  safeAccount(2, 5, onlySafe, shared),
@@ -106,7 +107,9 @@ func TestSafeAddressAndBlock(t *testing.T) {
 	t.Run("plain", func(t *testing.T) {
 		// The output without flags keeps its shape, with the settings at its top level.
 		var got map[string]json.RawMessage
-		json.Unmarshal([]byte(run(t, "-json")), &got)
+		if err := json.Unmarshal([]byte(run(t, "-json")), &got); err != nil {
+			t.Fatalf("decoding safe -json: %v", err)
+		}
 		for _, key := range []string{"safe", "chainId", "safeBlock", "singleton", "owners", "ownerCount", "threshold", "nonce", "modules", "fallbackHandler", "guard", "moduleGuard"} {
 			if _, ok := got[key]; !ok {
 				t.Errorf("safe -json: output has no %q", key)
@@ -160,6 +163,8 @@ func TestSafeAddressAndBlock(t *testing.T) {
 			{[]string{"-address", unknownSingleton.String()}, "isn't a Safe of a § 2.1 version at block 200: its singleton isn't"},
 			// The other Safe isn't deployed yet at block 150.
 			{[]string{"-address", stateOther.String(), "-block", "150"}, "isn't a Safe of a § 2.1 version at block 150: it has no code"},
+			// Block 0 is read like any other, before the Safe was deployed.
+			{[]string{"-block", "0"}, "isn't a Safe of a § 2.1 version at block 0: it has no code"},
 		} {
 			code, stdout, stderr := runArbot(t, append([]string{"-config", config, "safe", "-json", "-request-file", request}, test.args...)...)
 			if code != 1 || stdout != "" || !strings.Contains(stderr, test.reason) || !strings.Contains(stderr, "arbot account shows what it is") {
@@ -226,6 +231,18 @@ func TestSafeTransientError(t *testing.T) {
 		code, stdout, stderr := runArbot(t, append([]string{"-config", config}, args...)...)
 		if code != 1 || stdout != "" || !strings.Contains(stderr, "run the command again later") {
 			t.Errorf("%v: got status %d, stdout %q, stderr %q; want 1 and a hint to run it again", args, code, stdout, stderr)
+		}
+	}
+	// So does a node that fails only to serve the code that identifies the account,
+	// whose storage it would then read as a Safe's.
+	node = &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{
+		150: {stateSafe: safeAccount(1, 4)}, 200: {stateOther: safeAccount(1, 9)},
+	}, failing: "eth_getCode"}
+	config, request = stateFiles(t, node.serve(t))
+	for _, args := range [][]string{{"-address", stateOther.String()}, {"-block", "150"}} {
+		code, stdout, stderr := runArbot(t, append([]string{"-config", config, "safe", "-request-file", request}, args...)...)
+		if code != 1 || stdout != "" || !strings.Contains(stderr, "run the command again later") {
+			t.Errorf("safe %v with eth_getCode failing: got status %d, stdout %q, stderr %q; want 1 and a hint to run it again", args, code, stdout, stderr)
 		}
 	}
 }
