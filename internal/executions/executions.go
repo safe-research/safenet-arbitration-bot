@@ -84,8 +84,9 @@ type Execution struct {
 // Finder finds the Safe transactions that a Safe executed on a chain.
 type Finder struct {
 	// Eth is a client for the chain. The node must serve eth_call at the last block
-	// that Find searches for the calldata and trace sources, which are otherwise
-	// skipped, and debug_traceTransaction for the trace source.
+	// that Find searches, and for FindAll at the blocks of the executions that it
+	// decodes, for the calldata and trace sources, which are otherwise skipped, and
+	// debug_traceTransaction for the trace source.
 	Eth *ethrpc.Client
 	// Service is a client for the chain's Safe Transaction Service, or nil to leave
 	// it out.

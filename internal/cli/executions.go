@@ -38,8 +38,8 @@ type historyReport struct {
 	// it, unless a delegate call changed it.
 	Nonce *big.Int `json:"nonce"`
 	// Complete is whether the executions account for every nonce below Nonce, and
-	// Missing are the ranges of those that they don't, or null if the nonce is too
-	// large to list them.
+	// don't show that a delegate call set it back, and Missing are the ranges of
+	// those that they don't use, or null if the nonce is too large to list them.
 	Complete bool                    `json:"complete"`
 	Missing  []executions.NonceRange `json:"missingNonces"`
 	// Rejected are the executions that the service lists but the chain doesn't
@@ -106,15 +106,17 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "reports with its URL and when it was observed, and lists the Safe's executed transactions from it. It\n")
 		fmt.Fprintf(out, "reads the Safe's logs in each block that the service names, and keeps the executions that the Safe\n")
 		fmt.Fprintf(out, "logged there, whether the service lists them rightly or not, which it decodes as above, taking a\n")
-		fmt.Fprintf(out, "transaction that the service lists with its hash from the listing. A block whose logs have no\n")
-		fmt.Fprintf(out, "execution of the Safe is read again once. An execution that the service lists is confirmed only if\n")
-		fmt.Fprintf(out, "its fields hash to its Safe transaction hash, and the Safe logged the execution of that hash in the\n")
-		fmt.Fprintf(out, "block and transaction that the service reports. Any other is rejected, with the reason.\n\n")
+		fmt.Fprintf(out, "transaction that the service lists with its hash from the listing. Not every block is read, so the\n")
+		fmt.Fprintf(out, "nonce of an execution is worked out from the Safe's nonce at the end of its block. A block whose logs\n")
+		fmt.Fprintf(out, "have no execution of the Safe is read again once. An execution that the service lists is confirmed\n")
+		fmt.Fprintf(out, "only if its fields hash to its Safe transaction hash, and the Safe logged the execution of that hash in\n")
+		fmt.Fprintf(out, "the block and transaction that the service reports. Any other is rejected, with the reason.\n\n")
 		fmt.Fprintf(out, "Every execution uses the next nonce, so the Safe's nonce at the Safe block is the number of executions\n")
 		fmt.Fprintf(out, "up to it, unless a delegate call changed it. It reports the nonces that no execution found used, and\n")
-		fmt.Fprintf(out, "the history is complete if there are none. A Safe that the service doesn't know is a warning, and its\n")
-		fmt.Fprintf(out, "nonces show what that leaves out. Executions by modules don't use nonces, and the service doesn't\n")
-		fmt.Fprintf(out, "list them, so they aren't listed.\n\n")
+		fmt.Fprintf(out, "the history is complete if there are none, and the nonces of the executions found don't show that a\n")
+		fmt.Fprintf(out, "delegate call set the nonce back. A Safe that the service doesn't know is a warning, and its nonces\n")
+		fmt.Fprintf(out, "show what that leaves out. Executions by modules don't use nonces, and the service doesn't list them,\n")
+		fmt.Fprintf(out, "so they aren't listed.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {

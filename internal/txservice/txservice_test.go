@@ -161,8 +161,9 @@ func TestDefaultURLs(t *testing.T) {
 
 // serveExecutions starts a service that knows safe and lists n executed
 // transactions of it, in pages, with the ones in broken having no transaction
-// hash, and one that isn't executed, and returns a client for it. Like the
-// service, it lists nothing for any other Safe, which it doesn't know.
+// hash, the ones after them no block, and one that isn't executed, and returns
+// a client for it. Like the service, it lists nothing for any other Safe, which
+// it doesn't know.
 func serveExecutions(t *testing.T, safe ethrpc.Address, n int, broken ...int) *Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +198,8 @@ func serveExecutions(t *testing.T, safe ethrpc.Address, n int, broken ...int) *C
 				result["isExecuted"], result["transactionHash"], result["blockNumber"] = false, nil, nil
 			case slices.Contains(broken, i):
 				result["transactionHash"] = nil
+			case slices.Contains(broken, i-1):
+				result["blockNumber"] = nil
 			}
 			results = append(results, result)
 		}
@@ -209,7 +212,7 @@ func serveExecutions(t *testing.T, safe ethrpc.Address, n int, broken ...int) *C
 func TestExecutions(t *testing.T) {
 	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
 	// More than a page, so that the client asks for the second one, with one
-	// without its onchain transaction.
+	// without its onchain transaction and one without its block.
 	got, err := serveExecutions(t, safe, 150, 7).Executions(t.Context(), safe)
 	if err != nil {
 		t.Fatalf("Executions: %v", err)
@@ -220,8 +223,11 @@ func TestExecutions(t *testing.T) {
 	for i, x := range got {
 		want := Execution{SafeTxHash: ethrpc.Hash{0: 0x5a, 31: byte(i)}, TxHash: ethrpc.Hash{0: 0x7a, 31: byte(i)}, Block: uint64(1000 + i)}
 		if i == 7 {
-			// It is listed without them, for the caller to report.
-			want.TxHash, want.Block = ethrpc.Hash{}, 0
+			// It is listed without its onchain transaction, for the caller to report.
+			want.TxHash = ethrpc.Hash{}
+		}
+		if i == 8 {
+			want.Block = 0
 		}
 		if x.SafeTxHash != want.SafeTxHash || x.TxHash != want.TxHash || x.Block != want.Block ||
 			x.Transaction == nil || x.Transaction.Nonce.Int64() != int64(i) || x.Transaction.Safe != safe || x.Transaction.ChainID.Int64() != 1 {
@@ -258,6 +264,52 @@ func TestExecutionsCap(t *testing.T) {
 	}
 }
 
+func TestExecutionsPages(t *testing.T) {
+	// A service that lists fewer results than it is asked for, as one with a
+	// smaller maximum page does, says that there are more with its next link.
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	const n, perPage = 150, 40
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		results := []map[string]any{}
+		for i := offset; i < min(n, offset+perPage); i++ {
+			results = append(results, map[string]any{"safe": safe, "nonce": i, "transactionHash": ethrpc.Hash{31: byte(i)}, "blockNumber": i + 1})
+		}
+		var next any
+		if offset+perPage < n {
+			next = "https://example.invalid/next"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"count": n, "next": next, "results": results})
+	}))
+	t.Cleanup(server.Close)
+	got, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe)
+	if err != nil || len(got) != n {
+		t.Fatalf("Executions: got %d executions and error %v, want %d", len(got), err, n)
+	}
+	for i, x := range got {
+		if x.Transaction.Nonce.Int64() != int64(i) {
+			t.Fatalf("Executions[%d]: got nonce %s, want %d", i, x.Transaction.Nonce, i)
+		}
+	}
+}
+
+func TestExecutionsAtCap(t *testing.T) {
+	// A listing of exactly the cap is listed in full.
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	page, _ := json.Marshal(map[string]any{"results": slices.Repeat([]map[string]any{{"safe": safe, "nonce": 0}}, pageSize)})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset >= maxListed {
+			w.Write([]byte(`{"results": []}`))
+			return
+		}
+		w.Write(page)
+	}))
+	t.Cleanup(server.Close)
+	if got, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err != nil || len(got) != maxListed {
+		t.Errorf("Executions of %d: got %d and error %v", maxListed, len(got), err)
+	}
+}
+
 func TestExecutionsErrors(t *testing.T) {
 	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
 	// A service for another Safe lists nothing for this one, and doesn't know it.
@@ -271,5 +323,27 @@ func TestExecutionsErrors(t *testing.T) {
 	t.Cleanup(server.Close)
 	if _, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "500") {
 		t.Errorf("Executions from a failing service: got error %v, want one with the status", err)
+	}
+	// A next page after a page without results would never end, so the service
+	// fails after a few.
+	pages := make(chan struct{}, 3)
+	endless := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case pages <- struct{}{}:
+			w.Write([]byte(`{"next": "https://example.invalid/next", "results": []}`))
+		default:
+			http.Error(w, "asked again for an empty page", http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(endless.Close)
+	if _, err := NewClient(endless.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err == nil || !strings.Contains(err.Error(), "has a next page") {
+		t.Errorf("Executions of an endless listing without results: got error %v, want one about the next page", err)
+	}
+	// The service lists nothing for a Safe that it doesn't know, so a listing that
+	// isn't found is at a wrong URL.
+	missing := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(missing.Close)
+	if _, err := NewClient(missing.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "404") {
+		t.Errorf("Executions at a wrong URL: got error %v, want one with the status", err)
 	}
 }

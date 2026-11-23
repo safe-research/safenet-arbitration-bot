@@ -30,7 +30,8 @@ var (
 // that the decoding sources read.
 type chain struct {
 	logs []ethrpc.Log
-	// nonce is the Safe's nonce at the last block, or nil if reading it fails.
+	// nonce is the Safe's nonce at the last block, 200, or nil if reading it fails,
+	// and at an earlier block, it is less the Safe's executions after it.
 	nonce *big.Int
 	// txs are the transactions by hash.
 	txs map[ethrpc.Hash]ethrpc.Transaction
@@ -134,11 +135,17 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 				res["result"] = "0x"
 				break
 			}
-			if c.nonce == nil || call.To != safe || block != 200 || string(call.Data) != string(solabi.Call(nonceSelector)) {
+			if c.nonce == nil || call.To != safe || block > 200 || string(call.Data) != string(solabi.Call(nonceSelector)) {
 				fail("execution reverted")
 				break
 			}
-			word := solabi.Uint(c.nonce)
+			nonce := new(big.Int).Set(c.nonce)
+			for _, log := range c.logs {
+				if log.BlockNumber > block && log.BlockNumber <= 200 && log.Topics[0] != multiSigEvent {
+					nonce.Sub(nonce, big.NewInt(1))
+				}
+			}
+			word := solabi.Uint(nonce)
 			res["result"] = ethrpc.Bytes(word[:])
 		case "eth_getTransactionByHash":
 			var hash ethrpc.Hash

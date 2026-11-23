@@ -146,8 +146,11 @@ func (c *Client) Executions(ctx context.Context, safe ethrpc.Address) ([]Executi
 		x := Execution{SafeTxHash: r.SafeTxHash, Transaction: r.safeTransaction(c.chainID)}
 		// An execution without its onchain transaction or block is still listed, so
 		// that the caller reports it rather than drop it.
-		if r.TransactionHash != nil && r.BlockNumber != nil {
-			x.TxHash, x.Block = *r.TransactionHash, *r.BlockNumber
+		if r.TransactionHash != nil {
+			x.TxHash = *r.TransactionHash
+		}
+		if r.BlockNumber != nil {
+			x.Block = *r.BlockNumber
 		}
 		executions = append(executions, x)
 	}
@@ -165,23 +168,30 @@ func list[T any](ctx context.Context, c *Client, safe ethrpc.Address, endpoint s
 	}
 	query.Set("limit", strconv.Itoa(pageSize))
 	results := []T{}
-	for offset := 0; ; offset += pageSize {
-		if offset >= maxListed {
-			return nil, fmt.Errorf("the service lists more than %d %s", maxListed, endpoint)
-		}
+	for offset := 0; ; {
 		// The pages are by offset rather than the service's next links, so that every
 		// request is to the service.
 		query.Set("offset", strconv.Itoa(offset))
 		var page struct {
-			Results []T `json:"results"`
+			Next    *string `json:"next"`
+			Results []T     `json:"results"`
 		}
-		if err := c.get(ctx, base+"/?"+query.Encode(), &page); err != nil {
+		if err := c.getListing(ctx, base+"/?"+query.Encode(), &page); err != nil {
 			return nil, err
 		}
 		results = append(results, page.Results...)
-		if len(page.Results) < pageSize {
+		if len(results) > maxListed {
+			return nil, fmt.Errorf("the service lists more than %d %s", maxListed, endpoint)
+		}
+		// A service can list fewer results than it is asked for, and then has a next
+		// page.
+		if page.Next == nil && len(page.Results) < pageSize {
 			return results, nil
 		}
+		if len(page.Results) == 0 {
+			return nil, fmt.Errorf("the service lists no %s at offset %d, but has a next page", endpoint, offset)
+		}
+		offset += len(page.Results)
 	}
 }
 
@@ -195,6 +205,17 @@ func (c *Client) known(ctx context.Context, safe ethrpc.Address) error {
 		return err
 	}
 	return c.get(ctx, u+"/", &struct{}{})
+}
+
+// getListing is get for a page of a listing, which is never ErrNotFound: the
+// service lists nothing for a Safe that it doesn't know, rather than fail, so a
+// listing that it doesn't have is at a wrong URL.
+func (c *Client) getListing(ctx context.Context, u string, v any) error {
+	err := c.get(ctx, u, v)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("HTTP 404 Not Found: the service at %q has no such listing", c.baseURL)
+	}
+	return err
 }
 
 // get fetches the JSON document at u, and decodes it into v. It returns

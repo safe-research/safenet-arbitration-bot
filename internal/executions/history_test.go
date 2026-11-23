@@ -15,7 +15,7 @@ import (
 )
 
 // listing is an executed Safe transaction as a Safe Transaction Service lists
-// it. A listing without a transaction hash has neither it nor a block.
+// it. A zero transaction hash or block is one that the listing doesn't have.
 type listing struct {
 	tx         *safenet.SafeTransaction
 	safeTxHash ethrpc.Hash
@@ -58,7 +58,10 @@ func historyService(t *testing.T, listings []listing) *txservice.Client {
 				"isExecuted": true,
 			}
 			if l.txHash == (ethrpc.Hash{}) {
-				result["transactionHash"], result["blockNumber"] = nil, nil
+				result["transactionHash"] = nil
+			}
+			if l.block == 0 {
+				result["blockNumber"] = nil
 			}
 			results = append(results, result)
 		}
@@ -227,6 +230,42 @@ func TestFindAllMissing(t *testing.T) {
 	}
 }
 
+func TestFindAllMisreportedBeforeMissing(t *testing.T) {
+	const last = 200
+	// Four executions, at the nonces 0 to 3. The service misreports the fields of
+	// the one at nonce 1, and doesn't list the one at nonce 2 after it, so the
+	// nonce worked out from the Safe's is wrong for the misreported one.
+	var txs []*safenet.SafeTransaction
+	c := &chain{nonce: big.NewInt(4), txs: make(map[ethrpc.Hash]ethrpc.Transaction)}
+	for n := range 4 {
+		tx := transaction("calldata", int64(n))
+		txs = append(txs, tx)
+		c.txs[hash(byte(n+1))] = ethrpc.Transaction{To: &safe, Input: execCall(tx)}
+		c.logs = append(c.logs, executionLog(executionSuccessEvent, tx.Hash(), hash(byte(n+1)), true, uint64(100+10*n), 0))
+	}
+	tampered := *txs[1]
+	tampered.Data = []byte("not what was executed")
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, []listing{
+		listed(txs[0], hash(1), 100),
+		{&tampered, txs[1].Hash(), hash(2), 110},
+		listed(txs[3], hash(4), 130),
+	})}
+	got, err := f.FindAll(t.Context(), safe, last)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	// The nonce of the misreported one is worked out from the Safe's at the end of
+	// its block.
+	checkExecutions(t, got.Executions, []Execution{
+		executed(txs[0], hash(1), 100, SourceService),
+		executed(txs[1], hash(2), 110, SourceCalldata),
+		executed(txs[3], hash(4), 130, SourceService),
+	})
+	if want := []NonceRange{{2, 2}}; !reflect.DeepEqual(got.Missing, want) {
+		t.Errorf("FindAll: got missing %v, want %v", got.Missing, want)
+	}
+}
+
 func TestFindAllRejected(t *testing.T) {
 	const last = 200
 	// The Safe's nonce is 7 at the last block. The executions at the nonces 0 and 1
@@ -294,6 +333,37 @@ func TestFindAllRejected(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Errorf("warnings: got %v, want none", warnings)
+	}
+}
+
+func TestFindAllNonceSetBack(t *testing.T) {
+	// The execution at nonce 1 is a delegate call that sets the Safe's nonce back
+	// to 0, so nonces 0 and 1 are used twice. The service lists all but the second
+	// at nonce 0, so every nonce below the Safe's is used.
+	txs := []*safenet.SafeTransaction{
+		transaction("first", 0), transaction("reset", 1), transaction("again", 0), transaction("again", 1), transaction("last", 2),
+	}
+	c := &chain{nonce: big.NewInt(3)}
+	var listings []listing
+	for i, tx := range txs {
+		block := uint64(100 + 10*i)
+		c.logs = append(c.logs, executionLog(executionSuccessEvent, tx.Hash(), hash(byte(i+1)), true, block, 0))
+		if i != 2 {
+			listings = append(listings, listed(tx, hash(byte(i+1)), block))
+		}
+	}
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, listings)}
+	var warnings []error
+	f.Warn = func(err error) { warnings = append(warnings, err) }
+	got, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if got.Complete() || len(got.Missing) != 0 {
+		t.Errorf("FindAll: got %+v, complete %t; want none missing, incomplete", got, got.Complete())
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "set the Safe's nonce back") {
+		t.Errorf("warnings: got %v, want one about the nonce set back", warnings)
 	}
 }
 
@@ -422,4 +492,60 @@ func TestMissing(t *testing.T) {
 	if got := missing(nil, 0); got == nil || len(got) != 0 {
 		t.Errorf("missing with nonce 0: got %v, want none", got)
 	}
+}
+
+func TestFindAllUnlistedInListedBlock(t *testing.T) {
+	const last = 200
+	// Three executions, at the nonces 0 to 2. Block 100 has the ones at nonces 0
+	// and 1, of which the service only lists the first, and the service doesn't
+	// list block 110, which has the one at nonce 2.
+	var txs []*safenet.SafeTransaction
+	c := &chain{nonce: big.NewInt(3), txs: make(map[ethrpc.Hash]ethrpc.Transaction)}
+	for n := range 3 {
+		tx := transaction("calldata", int64(n))
+		txs = append(txs, tx)
+		c.txs[hash(byte(n+1))] = ethrpc.Transaction{To: &safe, Input: execCall(tx)}
+	}
+	c.logs = []ethrpc.Log{
+		executionLog(executionSuccessEvent, txs[0].Hash(), hash(1), true, 100, 0),
+		executionLog(executionSuccessEvent, txs[1].Hash(), hash(2), true, 100, 1),
+		executionLog(executionSuccessEvent, txs[2].Hash(), hash(3), true, 110, 0),
+	}
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, []listing{listed(txs[0], hash(1), 100)})}
+	got, err := f.FindAll(t.Context(), safe, last)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	second := executed(txs[1], hash(2), 100, SourceCalldata)
+	second.LogIndex = 1
+	checkExecutions(t, got.Executions, []Execution{executed(txs[0], hash(1), 100, SourceService), second})
+	if want := []NonceRange{{2, 2}}; !reflect.DeepEqual(got.Missing, want) {
+		t.Errorf("FindAll: got missing %v, want %v", got.Missing, want)
+	}
+}
+
+func TestFindAllListedWithoutTxHash(t *testing.T) {
+	const last = 200
+	// The service lists two executions with their blocks but not their onchain
+	// transactions, one of them after the last block.
+	first, later := transaction("first", 0), transaction("later", 1)
+	c := &chain{
+		nonce: big.NewInt(1),
+		logs: []ethrpc.Log{
+			executionLog(executionSuccessEvent, first.Hash(), hash(1), true, 170, 0),
+			executionLog(executionSuccessEvent, later.Hash(), hash(2), true, last+1, 0),
+		},
+	}
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, []listing{
+		{first, first.Hash(), ethrpc.Hash{}, 170},
+		{later, later.Hash(), ethrpc.Hash{}, last + 1},
+	})}
+	got, err := f.FindAll(t.Context(), safe, last)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	// The block is read all the same, and only the listing up to the last block is
+	// rejected.
+	checkExecutions(t, got.Executions, []Execution{executed(first, hash(1), 170, SourceService)})
+	checkRejected(t, got.Rejected, []ethrpc.Hash{first.Hash()}, []string{"no onchain transaction"})
 }

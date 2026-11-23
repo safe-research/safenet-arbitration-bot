@@ -27,12 +27,16 @@ type History struct {
 	// Rejected are the executions that the service lists up to the last block but
 	// that the chain doesn't confirm, in the order that the service lists them.
 	Rejected []Rejected
+	// setBack is whether the nonces of the executions found show that a delegate
+	// call set the Safe's nonce back.
+	setBack bool
 }
 
 // Complete reports whether the executions found account for every nonce below
-// the Safe's nonce.
+// the Safe's nonce, and the nonce counts the executions: none of them shows
+// that a delegate call set it back.
 func (h *History) Complete() bool {
-	return h.Missing != nil && len(h.Missing) == 0
+	return h.Missing != nil && len(h.Missing) == 0 && !h.setBack
 }
 
 // NonceRange is a range of nonces, From to To, including both.
@@ -123,22 +127,27 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	}
 
 	// The blocks are read in order, so the executions are in the order of their
-	// logs. The nonce is already read, and is that of the last execution, plus one,
-	// if the history is complete.
+	// logs. Only the blocks that the service names are read, so an execution's
+	// nonce is worked out from the Safe's at the end of its block.
 	d := &decoder{
 		Finder: f, safe: safe, to: to, executions: c.executions, events: c.events, listed: transactions,
-		nonceRead: true, nonceNext: nonce,
+		byBlock: true, nexts: map[uint64]*big.Int{uint64(to): nonce},
 	}
 	if err := d.decodeAll(ctx); err != nil {
 		return nil, err
 	}
 	h := &History{Nonce: nonce, Executions: c.executions, Rejected: []Rejected{}}
 
+	found := make(map[blockHash][]ethrpc.Hash)
+	for _, e := range h.Executions {
+		k := blockHash{e.Block, e.SafeTxHash}
+		found[k] = append(found[k], e.TxHash)
+	}
 	for _, x := range listed {
 		if x.Block > uint64(to) {
 			continue
 		}
-		if reason := confirm(x, safe, h.Executions); reason != "" {
+		if reason := confirm(x, safe, found); reason != "" {
 			h.Rejected = append(h.Rejected, Rejected{SafeTxHash: x.SafeTxHash, TxHash: x.TxHash, Nonce: x.Transaction.Nonce, Reason: reason})
 		}
 	}
@@ -147,12 +156,51 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	} else {
 		f.warn(fmt.Errorf("the Safe's nonce %s is too large to list the nonces that no execution used", nonce))
 	}
+	if h.setBack = setBack(h.Executions); h.setBack {
+		f.warn(errors.New("the nonces of the executions found show that a delegate call set the Safe's nonce back, so the nonce doesn't count the executions"))
+	}
 	return h, nil
 }
 
+// setBack reports whether the nonces of the known transactions of executions,
+// in the order of their logs, show that a delegate call set the Safe's nonce
+// back: an onchain transaction uses a nonce that isn't above those of the
+// earlier ones. The executions of one onchain transaction can log in another
+// order, since an execution nested in another logs first.
+func setBack(executions []Execution) bool {
+	// earlier is the highest nonce of the onchain transactions before tx, and
+	// highest that of all of them so far.
+	var earlier, highest *big.Int
+	var tx ethrpc.Hash
+	for _, e := range executions {
+		if e.Transaction == nil {
+			continue
+		}
+		n := e.Transaction.Nonce
+		if e.TxHash != tx {
+			tx, earlier = e.TxHash, highest
+		}
+		if earlier != nil && n.Cmp(earlier) <= 0 {
+			return true
+		}
+		if highest == nil || n.Cmp(highest) > 0 {
+			highest = n
+		}
+	}
+	return false
+}
+
+// blockHash is a block and the hash of a Safe transaction executed in it.
+type blockHash struct {
+	block      uint64
+	safeTxHash ethrpc.Hash
+}
+
 // confirm returns why the chain doesn't confirm the execution x that the
-// service lists, given the executions of the Safe found, or "" if it does.
-func confirm(x txservice.Execution, safe ethrpc.Address, executions []Execution) string {
+// service lists, given the onchain transactions of the executions of the Safe
+// found, in the order of their logs, by block and Safe transaction hash, or ""
+// if it does.
+func confirm(x txservice.Execution, safe ethrpc.Address, found map[blockHash][]ethrpc.Hash) string {
 	switch {
 	case x.Block == 0 || x.TxHash == (ethrpc.Hash{}):
 		return "the service gives no onchain transaction or block"
@@ -161,17 +209,12 @@ func confirm(x txservice.Execution, safe ethrpc.Address, executions []Execution)
 	case !matches(x.Transaction, x.SafeTxHash):
 		return "the transaction's fields don't hash to its Safe transaction hash"
 	}
-	var in []Execution
-	for _, e := range executions {
-		if e.SafeTxHash == x.SafeTxHash && e.Block == x.Block {
-			if e.TxHash == x.TxHash {
-				return ""
-			}
-			in = append(in, e)
-		}
+	txs := found[blockHash{x.Block, x.SafeTxHash}]
+	if slices.Contains(txs, x.TxHash) {
+		return ""
 	}
-	if len(in) > 0 {
-		return fmt.Sprintf("the Safe logged its execution in block %d in the transaction %s, not the one that the service reports", x.Block, in[0].TxHash)
+	if len(txs) > 0 {
+		return fmt.Sprintf("the Safe logged its execution in block %d in the transaction %s, not the one that the service reports", x.Block, txs[0])
 	}
 	return fmt.Sprintf("the Safe logged no execution of it in block %d", x.Block)
 }
