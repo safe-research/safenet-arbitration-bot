@@ -87,7 +87,8 @@ type Finder struct {
 	// it out.
 	Service *txservice.Client
 	// Warn is called with the errors of sources that failed for a reason other than
-	// not having the transaction, such as an unreachable service. It may be nil.
+	// not having the transaction, such as a service that refuses the request. A
+	// request that gets no answer fails the search instead. It may be nil.
 	Warn func(error)
 }
 

@@ -136,18 +136,61 @@ func TestScanLogsStopsEarly(t *testing.T) {
 
 func TestScanLogsHalvesRangeOnLimitExceeded(t *testing.T) {
 	fastRateLimitRetries(t)
-	// Some nodes report too many results with -32005 and HTTP status 200, which
-	// RawRequest retries as a rate limit. The error may be about the range, so the
-	// scan halves it once the retries fail.
+	// Some nodes report too many results with -32005, the code of a rate limit, and
+	// HTTP status 200. The error may be about the range, so the scan halves it
+	// without retrying it first.
 	want := []BlockNumber{0, 9_999}
 	client, ranges := limitNode(t, 5_000, http.StatusOK, -32005, want...)
 
 	if got := scan(t, client, LogFilter{FromBlock: 0, ToBlock: 9_999}); !slices.Equal(got, want) {
 		t.Errorf("blocks: got %v, want %v", got, want)
 	}
-	wantRanges := append(slices.Repeat([][2]BlockNumber{{0, 9_999}}, rateLimitRetries+1), [2]BlockNumber{0, 4_999}, [2]BlockNumber{5_000, 9_999})
+	wantRanges := [][2]BlockNumber{{0, 9_999}, {0, 4_999}, {5_000, 9_999}}
 	if !slices.Equal(*ranges, wantRanges) {
 		t.Errorf("ranges: got %v, want %v", *ranges, wantRanges)
+	}
+}
+
+func TestScanLogsRetriesLimitExceededAtMinimumRange(t *testing.T) {
+	fastRateLimitRetries(t)
+	// A -32005 for the smallest range can't be about its size, so it is retried as
+	// a rate limit there, and only there.
+	client, ranges := limitNode(t, 0, http.StatusOK, -32005)
+	var err error
+	for _, err = range client.ScanLogs(t.Context(), LogFilter{FromBlock: 0, ToBlock: 100_000}) {
+		break
+	}
+	// 10,000 blocks halved 8 times, down to 50, then the retries of 50 blocks.
+	if want := 8 + rateLimitRetries + 1; err == nil || len(*ranges) != want {
+		t.Errorf("ScanLogs: got %v after %d requests, want an error after %d", err, len(*ranges), want)
+	}
+}
+
+func TestScanLogsKeepsRangeOnThrottling(t *testing.T) {
+	fastRateLimitRetries(t)
+	// A -32005 that says it is a rate limit isn't about the range, so the scan
+	// retries it, and fails with it, rather than halve the range.
+	var ranges atomic.Int64
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		ranges.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32005, "message": "Rate limit exceeded"}})
+	})
+	var err error
+	for _, err = range connect(t, url).ScanLogs(t.Context(), LogFilter{FromBlock: 0, ToBlock: 100_000}) {
+		break
+	}
+	if want := rateLimitRetries + 1; !Transient(err) || ranges.Load() != int64(want) {
+		t.Errorf("ScanLogs: got %v after %d requests, want a transient error after %d requests for one range", err, ranges.Load(), want)
+	}
+}
+
+func TestScanLogsHalvesRangeOnTimeout(t *testing.T) {
+	// A node that times out on a range, which isn't an answer, may answer a smaller
+	// one.
+	want := []BlockNumber{100, 7_000}
+	client, ranges := limitNode(t, 5_000, http.StatusOK, -32016, want...)
+	if got := scan(t, client, LogFilter{FromBlock: 0, ToBlock: 9_999}); !slices.Equal(got, want) || len(*ranges) != 3 {
+		t.Errorf("got blocks %v in ranges %v, want %v in 3 ranges", got, *ranges, want)
 	}
 }
 
