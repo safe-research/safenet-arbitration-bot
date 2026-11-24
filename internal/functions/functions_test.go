@@ -1,8 +1,10 @@
 package functions
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -27,6 +29,12 @@ func TestSelectors(t *testing.T) {
 		"createProxyWithNonce(address,bytes,uint256)":                                                "0x1688f0b9",
 		"performCreate(uint256,bytes)":                                                               "0x4c8c9ea1",
 		"performCreate2(uint256,bytes,bytes32)":                                                      "0x4847be6f",
+		"setup(address[],uint256,address,bytes,address,address,uint256,address)":                     "0xb63e800d",
+		"createProxy(address,bytes)":                                                                 "0x61b69abd",
+		"createProxyWithNonceL2(address,bytes,uint256)":                                              "0x4662f9d6",
+		"createChainSpecificProxyWithNonce(address,bytes,uint256)":                                   "0xec9e80bb",
+		"createChainSpecificProxyWithNonceL2(address,bytes,uint256)":                                 "0x1a334b0b",
+		"createProxyWithCallback(address,bytes,uint256,address)":                                     "0xd18af54d",
 	} {
 		selector := solabi.Selector(signature)
 		if got := ethrpc.Bytes(selector[:]).String(); got != want {
@@ -148,6 +156,46 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
+	t.Run("proxy creations with a setup", func(t *testing.T) {
+		setup := solabi.Call(solabi.Selector("setup(address[],uint256,address,bytes,address,address,uint256,address)"),
+			[]ethrpc.Address{alice, bob}, big.NewInt(2), token, transfer, ethrpc.Address{}, ethrpc.Address{}, new(big.Int), ethrpc.Address{})
+		for want, data := range map[string]ethrpc.Bytes{
+			"createProxy > setup > transfer": solabi.Call(solabi.Selector("createProxy(address,bytes)"), singleton, setup),
+			"createProxyWithNonce > setup > transfer": solabi.Call(solabi.Selector("createProxyWithNonce(address,bytes,uint256)"),
+				singleton, setup, big.NewInt(4)),
+			"createProxyWithNonceL2 > setup > transfer": solabi.Call(solabi.Selector("createProxyWithNonceL2(address,bytes,uint256)"),
+				singleton, setup, big.NewInt(4)),
+			"createChainSpecificProxyWithNonce > setup > transfer": solabi.Call(solabi.Selector("createChainSpecificProxyWithNonce(address,bytes,uint256)"),
+				singleton, setup, big.NewInt(4)),
+			"createChainSpecificProxyWithNonceL2 > setup > transfer": solabi.Call(solabi.Selector("createChainSpecificProxyWithNonceL2(address,bytes,uint256)"),
+				singleton, setup, big.NewInt(4)),
+			"createProxyWithCallback > setup > transfer": solabi.Call(solabi.Selector("createProxyWithCallback(address,bytes,uint256,address)"),
+				singleton, setup, big.NewInt(4), alice),
+		} {
+			f := Decode(data)
+			if f == nil || f.String() != want {
+				t.Errorf("Decode: got %+v, want %s", f, want)
+				continue
+			}
+			s := f.Args[1].Call
+			if owners := s.Args[0]; owners.Name != "owners" || !reflect.DeepEqual(owners.Value, []ethrpc.Address{alice, bob}) {
+				t.Errorf("%s: owners %+v, want %s and %s", want, owners, alice, bob)
+			}
+			if threshold := s.Args[1]; threshold.Value.(*big.Int).Int64() != 2 {
+				t.Errorf("%s: threshold %+v, want 2", want, threshold)
+			}
+		}
+	})
+
+	t.Run("setup without a call", func(t *testing.T) {
+		// The Safe only delegate calls to with data if to isn't the zero address.
+		f := Decode(solabi.Call(solabi.Selector("setup(address[],uint256,address,bytes,address,address,uint256,address)"),
+			[]ethrpc.Address{alice}, big.NewInt(1), ethrpc.Address{}, transfer, ethrpc.Address{}, ethrpc.Address{}, new(big.Int), ethrpc.Address{}))
+		if f == nil || f.String() != "setup" || f.Args[3].Call != nil {
+			t.Errorf("Decode: got %+v, want setup whose data isn't decoded", f)
+		}
+	})
+
 	t.Run("execTransaction of unknown data", func(t *testing.T) {
 		f := Decode(execTransaction(token, 0, []byte{1, 2, 3, 4, 5}, 1))
 		if f == nil || f.Args[2].Call != nil || f.String() != "execTransaction" {
@@ -160,6 +208,9 @@ func TestDecodeMismatches(t *testing.T) {
 	transfer := solabi.Call(solabi.Selector("transfer(address,uint256)"), bob, big.NewInt(7))
 	badOperation := execTransaction(token, 0, nil, 0)
 	badOperation[4+3*32+30] = 1 // operation 256
+	badOwners := solabi.Call(solabi.Selector("setup(address[],uint256,address,bytes,address,address,uint256,address)"),
+		[]ethrpc.Address{alice}, big.NewInt(1), ethrpc.Address{}, []byte{}, ethrpc.Address{}, ethrpc.Address{}, new(big.Int), ethrpc.Address{})
+	copy(badOwners[4+8*32+24:], bytes.Repeat([]byte{0xff}, 8)) // 2^64-1 owners, far more than the data has
 	badOffset := execTransaction(token, 0, nil, 0)
 	badOffset[4+2*32+28] = 0xff // past the end of the data
 	for name, data := range map[string][]byte{
@@ -168,6 +219,7 @@ func TestDecodeMismatches(t *testing.T) {
 		"unknown selector": solabi.Call(solabi.Selector("transfer(address,uint128)"), bob, big.NewInt(7)),
 		"short arguments":  transfer[:4+40],
 		"operation 256":    badOperation,
+		"owners past data": badOwners,
 		"bad offset":       badOffset,
 	} {
 		if f := Decode(data); f != nil {

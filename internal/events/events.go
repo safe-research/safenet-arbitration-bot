@@ -119,6 +119,10 @@ func init() {
 	// doesn't index the proxy, and the later versions do.
 	define("ProxyCreation", in("address", "proxy"), in("address", "singleton"))
 	define("ProxyCreation", ix("address", "proxy"), in("address", "singleton"))
+	// Version 1.5.0 also logs these from its L2 functions.
+	define("ProxyCreationL2", ix("address", "proxy"), in("address", "singleton"), in("bytes", "initializer"), in("uint256", "saltNonce"))
+	define("ChainSpecificProxyCreationL2", ix("address", "proxy"), in("address", "singleton"), in("bytes", "initializer"),
+		in("uint256", "saltNonce"), in("uint256", "chainId"))
 }
 
 // Decode decodes a log as one of the well-known events. It returns nil if it

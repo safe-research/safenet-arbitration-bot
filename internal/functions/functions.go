@@ -1,7 +1,7 @@
 // Package functions decodes the call data of well-known functions: those of
-// ERC-20 tokens, the execTransaction of Safe 1.3.0, 1.4.1, and 1.5.0, the
-// createProxyWithNonce of their proxy factories, and the performCreate and
-// performCreate2 of their CreateCall contracts.
+// ERC-20 tokens, the execTransaction and setup of Safe 1.3.0, 1.4.1, and 1.5.0,
+// the functions of their proxy factories that create a proxy, and the
+// performCreate and performCreate2 of their CreateCall contracts.
 //
 // Call data is decoded by its selector and ABI layout only, so data that
 // decodes as one of them says nothing about the contract that it calls, whose
@@ -29,8 +29,9 @@ type Function struct {
 type Arg struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
-	// Value is an address, a *big.Int, a uint64, a 32-byte word, or bytes, all of
-	// which encode in JSON as text or numbers.
+	// Value is an address, a list of addresses, a *big.Int, a uint64, a 32-byte
+	// word, or bytes, all of which encode in JSON as text, numbers, or lists of
+	// them.
 	Value any `json:"value"`
 	// Call is the decoded call data of a bytes argument that is the data of a call
 	// that the function makes, such as the data of execTransaction, if it is that
@@ -39,11 +40,13 @@ type Arg struct {
 }
 
 // param is a parameter of a function. A bytes parameter that is call is the
-// data of a call that the function makes.
+// data of a call that the function makes, unless the earlier address parameter
+// named unless is the zero address.
 type param struct {
-	name string
-	typ  string
-	call bool
+	name   string
+	typ    string
+	call   bool
+	unless string
 }
 
 // definition is a well-known function: its name and parameters, in order.
@@ -85,10 +88,21 @@ func init() {
 	define("execTransaction", p("address", "to"), p("uint256", "value"), data("data"), p("uint8", "operation"),
 		p("uint256", "safeTxGas"), p("uint256", "baseGas"), p("uint256", "gasPrice"), p("address", "gasToken"),
 		p("address", "refundReceiver"), p("bytes", "signatures"))
+	// A new Safe's setup delegate calls to with data, unless to is the zero
+	// address.
+	define("setup", p("address[]", "owners"), p("uint256", "threshold"), p("address", "to"),
+		param{name: "data", typ: "bytes", call: true, unless: "to"},
+		p("address", "fallbackHandler"), p("address", "paymentToken"), p("uint256", "payment"), p("address", "paymentReceiver"))
 
 	// Safe proxy factories. They deploy a proxy of singleton, and call it with the
-	// initializer.
-	define("createProxyWithNonce", p("address", "singleton"), p("bytes", "initializer"), p("uint256", "saltNonce"))
+	// initializer, such as setup, or with data for 1.3.0's createProxy. The L2 and
+	// chain-specific functions differ only in the events they log and in the
+	// proxy's address.
+	define("createProxy", p("address", "singleton"), data("data"))
+	for _, name := range []string{"createProxyWithNonce", "createProxyWithNonceL2", "createChainSpecificProxyWithNonce", "createChainSpecificProxyWithNonceL2"} {
+		define(name, p("address", "singleton"), data("initializer"), p("uint256", "saltNonce"))
+	}
+	define("createProxyWithCallback", p("address", "singleton"), data("initializer"), p("uint256", "saltNonce"), p("address", "callback"))
 
 	// Safe CreateCall. It deploys a contract with the init code deploymentData and
 	// value, with CREATE, or CREATE2 and salt, from its own address, or from the
@@ -127,6 +141,14 @@ func decode(calldata []byte, depth int) *Function {
 			// take an address from the low 20 bytes of its word, ignoring the others.
 			w := d.Bytes32(i)
 			arg.Value = ethrpc.Address(w[12:])
+		case "address[]":
+			n, elems := d.Array(i)
+			addresses := make([]ethrpc.Address, n)
+			for j := range n {
+				w := elems.Bytes32(j)
+				addresses[j] = ethrpc.Address(w[12:])
+			}
+			arg.Value = addresses
 		case "uint256":
 			arg.Value = d.Uint(i)
 		case "uint8":
@@ -140,7 +162,7 @@ func decode(calldata []byte, depth int) *Function {
 		case "bytes":
 			b := d.Bytes(i)
 			arg.Value = ethrpc.Bytes(b)
-			if p.call && d.Err() == nil {
+			if p.call && d.Err() == nil && !zeroAddress(args[:i], p.unless) {
 				arg.Call = decode(b, depth+1)
 			}
 		}
@@ -150,6 +172,17 @@ func decode(calldata []byte, depth int) *Function {
 		args[i] = arg
 	}
 	return &Function{Name: def.name, Signature: def.signature, Args: args}
+}
+
+// zeroAddress reports whether args has an argument named name that is the zero
+// address.
+func zeroAddress(args []Arg, name string) bool {
+	for _, a := range args {
+		if a.Name == name {
+			return a.Value == any(ethrpc.Address{})
+		}
+	}
+	return false
 }
 
 // String returns the name of the function, followed by those of the well-known
