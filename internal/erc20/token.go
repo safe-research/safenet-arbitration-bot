@@ -27,8 +27,8 @@ type Token struct {
 	// since they are optional in ERC-20.
 	Name   string
 	Symbol string
-	// Decimals is nil if the contract doesn't return its decimals, which are
-	// optional in ERC-20 too.
+	// Decimals is nil if the contract's decimals() reverts, halts, or returns no
+	// data, as it may, since it is optional in ERC-20 too.
 	Decimals *uint8
 	// TotalSupply is the total supply that the contract returns, in the token's
 	// smallest unit, or nil if it doesn't return one.
@@ -40,8 +40,9 @@ type Token struct {
 // Read calls the ERC-20 view functions of the account token as of block, for
 // its name, symbol, decimals, total supply, and the balance of holder. It
 // returns nil if the account doesn't answer balanceOf, and decimals or else
-// allowance, as an ERC-20 token does, such as an account without code, or one
-// whose calls revert or halt.
+// allowance, as an ERC-20 token does, such as an account without code, one
+// whose calls revert or halt, or one whose decimals() answers with data that
+// isn't a uint8.
 func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address, block ethrpc.BlockNumber) (*Token, error) {
 	d, ok, err := call(ctx, eth, token, block, solabi.Call(decimalsSelector))
 	if err != nil {
@@ -49,9 +50,13 @@ func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address,
 	}
 	var decimals *uint8
 	if ok {
-		if n := d.Uint64(0); d.Err() == nil && n <= 255 {
-			decimals = new(uint8(n))
+		// A contract that has decimals() but doesn't answer it as an ERC-20 token does
+		// isn't one.
+		n := d.Uint64(0)
+		if d.Err() != nil || n > 255 {
+			return nil, nil
 		}
+		decimals = new(uint8(n))
 	}
 	if d, ok, err = call(ctx, eth, token, block, solabi.Call(balanceOfSelector, holder)); err != nil || !ok {
 		return nil, err
@@ -110,8 +115,10 @@ func Allowance(ctx context.Context, eth *ethrpc.Client, token, owner, spender et
 
 // call calls the account token with data as of block, and returns a decoder for
 // its return data, or false if the call reverted or halted, such as on an
-// invalid opcode. Any other error fails the call, so that a node that fails to
-// answer isn't read as an account that isn't a token.
+// invalid opcode, or returned no data, as an account without code does, or a
+// contract without the function whose fallback returns nothing. Any other error
+// fails the call, so that a node that fails to answer isn't read as an account
+// that isn't a token.
 func call(ctx context.Context, eth *ethrpc.Client, token ethrpc.Address, block ethrpc.BlockNumber, data []byte) (*solabi.Decoder, bool, error) {
 	result, err := eth.Call(ctx, ethrpc.CallRequest{To: token, Data: data}, block)
 	if err != nil {
@@ -119,6 +126,9 @@ func call(ctx context.Context, eth *ethrpc.Client, token ethrpc.Address, block e
 			return nil, false, nil
 		}
 		return nil, false, fmt.Errorf("calling %s at block %d: %w", token, block, err)
+	}
+	if len(result) == 0 {
+		return nil, false, nil
 	}
 	return solabi.NewDecoder(result), true, nil
 }

@@ -106,7 +106,7 @@ func transfers(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(flags.Output(), "list is only as complete as the service's index, and unlike with executions -all, nothing shows that\n")
 		fmt.Fprintf(flags.Output(), "one is missing. It asks the service only for the transfers of the direction, sender or recipient, and\n")
 		fmt.Fprintf(flags.Output(), "kinds listed, and fails if it lists more than 100,000 of them, such as spam transfers into the Safe\n")
-		fmt.Fprintf(flags.Output(), "with -in, or 200 at one time, more than it lists at once, or doesn't know the Safe.\n\n")
+		fmt.Fprintf(flags.Output(), "with -in, or more at one time than it lists at once, or doesn't know the Safe.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
@@ -188,7 +188,10 @@ func transfers(ctx context.Context, e *env, args []string) error {
 			if err != nil {
 				return fmt.Errorf("listing the transfers of %s from the Safe Transaction Service, which -all needs: %w", ref.Safe, err)
 			}
-			listed = append(listed, found...)
+			// The cap is on the transfers of all the kinds listed together.
+			if listed = append(listed, found...); len(listed) > txservice.MaxListed {
+				return fmt.Errorf("listing the transfers of %s from the Safe Transaction Service, which -all needs: the service lists more than %d transfers", ref.Safe, txservice.MaxListed)
+			}
 		}
 		// The service isn't trusted to filter rightly.
 		listed = slices.DeleteFunc(listed, func(t txservice.Transfer) bool {

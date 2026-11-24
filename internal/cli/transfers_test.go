@@ -16,9 +16,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
+	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
 )
 
 func TestTransfersErrors(t *testing.T) {
@@ -435,6 +437,43 @@ func TestTransfersAllFailure(t *testing.T) {
 		if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.stderr) {
 			t.Errorf("%s: got status %d, stdout %q, stderr %q; want 1, no output, and %q", test.name, code, stdout.String(), stderr.String(), test.stderr)
 		}
+	}
+}
+
+func TestTransfersAllCap(t *testing.T) {
+	// With -in, the service lists the ERC-20 and the native transfers into the Safe
+	// in two queries, each under the cap, which together are over it. It lists one
+	// a second, back from the latest, in pages.
+	start := time.Unix(1<<32, 0)
+	counts := map[string]int{"ERC20_TRANSFER": txservice.MaxListed/2 + 1, "ETHER_TRANSFER": txservice.MaxListed / 2}
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		kind, first := "ERC20_TRANSFER", 0
+		if q.Get("ether") == "true" {
+			kind = "ETHER_TRANSFER"
+		}
+		if q.Has("execution_date__lte") {
+			latest, _ := time.Parse(time.RFC3339, q.Get("execution_date__lte"))
+			first = int(start.Sub(latest) / time.Second)
+		}
+		results := []map[string]any{}
+		for i := first; i < min(first+200, counts[kind]); i++ {
+			results = append(results, map[string]any{
+				"type": kind, "blockNumber": 100, "from": historyAlice, "to": historySafe, "value": "1",
+				"executionDate": start.Add(-time.Duration(i) * time.Second).UTC().Format(time.RFC3339),
+			})
+		}
+		var next any
+		if first+200 < counts[kind] {
+			next = "https://example.invalid/next"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"next": next, "results": results})
+	}))
+	t.Cleanup(service.Close)
+	config, request := historyFiles(t, (&historyChain{}).serve(t), service.URL)
+	code, stdout, stderr := runArbot(t, "-config", config, "transfers", "-all", "-in", "-request-file", request)
+	if want := "lists more than 100000 transfers"; code != 1 || stdout != "" || !strings.Contains(stderr, want) {
+		t.Errorf("transfers -all -in: got status %d, stdout %q, stderr %.300q; want 1, no output, and an error containing %q", code, stdout, stderr, want)
 	}
 }
 

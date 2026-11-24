@@ -310,7 +310,7 @@ func TestExecutionsCap(t *testing.T) {
 	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
 	page, _ := json.Marshal(map[string]any{"results": slices.Repeat([]map[string]any{{"safe": safe, "nonce": 0}}, pageSize)})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset > 2*maxListed {
+		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset > 2*MaxListed {
 			http.Error(w, "unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -356,15 +356,15 @@ func TestExecutionsAtCap(t *testing.T) {
 	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
 	page, _ := json.Marshal(map[string]any{"results": slices.Repeat([]map[string]any{{"safe": safe, "nonce": 0}}, pageSize)})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset >= maxListed {
+		if offset, _ := strconv.Atoi(r.URL.Query().Get("offset")); offset >= MaxListed {
 			w.Write([]byte(`{"results": []}`))
 			return
 		}
 		w.Write(page)
 	}))
 	t.Cleanup(server.Close)
-	if got, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err != nil || len(got) != maxListed {
-		t.Errorf("Executions of %d: got %d and error %v", maxListed, len(got), err)
+	if got, err := NewClient(server.URL, ethrpc.Mainnet).Executions(t.Context(), safe); err != nil || len(got) != MaxListed {
+		t.Errorf("Executions of %d: got %d and error %v", MaxListed, len(got), err)
 	}
 }
 
@@ -606,6 +606,21 @@ func TestTransfersErrors(t *testing.T) {
 		errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "500") {
 		t.Errorf("Transfers from a failing service: got error %v, want one with the status", err)
 	}
+	// A page without transfers but with a next link, first or after a full page,
+	// has nothing to list the next page from.
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		results := []map[string]any{}
+		if !r.URL.Query().Has("execution_date__lte") && r.URL.Query().Has("_from") {
+			results = page
+		}
+		json.NewEncoder(w).Encode(map[string]any{"next": "https://example.invalid/next", "results": results})
+	}))
+	t.Cleanup(server.Close)
+	for _, filter := range []TransferFilter{{Kind: "erc20", ToBlock: 5000}, {Kind: "erc20", From: &safe, ToBlock: 5000}} {
+		if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, filter); err == nil || !strings.Contains(err.Error(), "but has a next page") {
+			t.Errorf("Transfers of an empty page with a next link: got error %v, want one about the page", err)
+		}
+	}
 	// The service lists nothing for a Safe that it doesn't know, so a listing that
 	// isn't found is at a wrong URL.
 	server = httptest.NewServer(http.NotFoundHandler())
@@ -613,6 +628,34 @@ func TestTransfersErrors(t *testing.T) {
 	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2000}); err == nil ||
 		errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "404") {
 		t.Errorf("Transfers at a wrong URL: got error %v, want one with the status", err)
+	}
+}
+
+func TestTransfersCap(t *testing.T) {
+	// A listing that doesn't end, as spam would make it, fails at the cap, rather
+	// than when the server stops, at twice as many transfers. It has a transfer
+	// each second, back from the time asked for.
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	start := time.Unix(1<<32, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		latest := start
+		if q := r.URL.Query(); q.Has("execution_date__lte") {
+			latest, _ = time.Parse(time.RFC3339, q.Get("execution_date__lte"))
+		}
+		if start.Sub(latest) > 2*MaxListed*time.Second {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		results := make([]map[string]any, transferPage)
+		for i := range results {
+			results[i] = map[string]any{"type": "ERC20_TRANSFER", "blockNumber": 1, "executionDate": latest.Add(-time.Duration(i) * time.Second).UTC().Format(time.RFC3339)}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, TransferFilter{Kind: "erc20", From: &safe, ToBlock: 2}); err == nil ||
+		!strings.Contains(err.Error(), "lists more than 100000 transfers") {
+		t.Errorf("Transfers of an endless listing: got error %v, want one about the cap", err)
 	}
 }
 

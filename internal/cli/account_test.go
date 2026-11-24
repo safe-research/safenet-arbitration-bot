@@ -167,10 +167,15 @@ func TestAccount(t *testing.T) {
 			"dd62ed3e": solabi.Encode(balance / 2),       // allowance(address,address)
 		}}
 	}
+	// A token without decimals or a total supply, which has an allowance.
+	tokenWithoutDecimals := ethrpc.Address{0: 0x70, 19: 2}
 	node := &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{
 		0:   {},
 		150: {stateToken: token(10)},
-		200: {stateToken: token(40), stateEOA: {balance: 7, nonce: 3}, stateSafe: {code: stateSafeProxy}},
+		200: {
+			stateToken: token(40), stateEOA: {balance: 7, nonce: 3}, stateSafe: {code: stateSafeProxy},
+			tokenWithoutDecimals: {code: ethrpc.Bytes{0x60, 0x00}, calls: map[string]ethrpc.Bytes{"70a08231": solabi.Encode(uint64(3)), "dd62ed3e": solabi.Encode(uint64(0))}},
+		},
 	}}
 	config, request := stateFiles(t, node.serve(t))
 	type output struct {
@@ -203,6 +208,15 @@ func TestAccount(t *testing.T) {
 	if want := `{"name":"Token","symbol":"","decimals":6,"totalSupply":1000000,"safeBalance":10,"spender":"` + strings.ToLower(spender.String()) + `","safeAllowance":5}`; got.Block != 150 || compactJSON(got.ERC20) != want {
 		t.Errorf("account -block 150 -spender of the token: got block %d and token %s, want block 150 and %s", got.Block, got.ERC20, want)
 	}
+	got = run(tokenWithoutDecimals.String())
+	if want := `{"name":"","symbol":"","decimals":null,"totalSupply":null,"safeBalance":3}`; compactJSON(got.ERC20) != want {
+		t.Errorf("account of a token without decimals: got token %s, want %s", got.ERC20, want)
+	}
+	code, stdout, stderr := runArbot(t, "-config", config, "account", "-request-file", request, tokenWithoutDecimals.String())
+	if code != 0 {
+		t.Fatalf("account of a token without decimals: got status %d, stderr %q", code, stderr)
+	}
+	matchLines(t, "account of a token without decimals", []byte(stdout), `^  Decimals      -$`, `^  Total supply  -$`, `^  Safe balance  3$`)
 	if got := run(stateEOA.String()); got.CodeSize != 0 || got.Balance.Int64() != 7 || got.Nonce != 3 || string(got.ERC20) != "null" {
 		t.Errorf("account of an account without code: got %+v, want balance 7, nonce 3, and no token", got)
 	}
@@ -217,7 +231,7 @@ func TestAccount(t *testing.T) {
 	if got := run("-block", "200", stateToken.String()); got.Block != 200 {
 		t.Errorf("account -block 200: got block %d, want 200", got.Block)
 	}
-	code, _, stderr := runArbot(t, "-config", config, "account", "-block", "201", "-request-file", request, stateToken.String())
+	code, _, stderr = runArbot(t, "-config", config, "account", "-block", "201", "-request-file", request, stateToken.String())
 	if code != 2 || !strings.Contains(stderr, "-block 201 is after the request's Safe block 200") {
 		t.Errorf("account -block 201: got status %d, stderr %q; want a usage error", code, stderr)
 	}
@@ -281,5 +295,15 @@ func TestAccountTransientError(t *testing.T) {
 		if code != 1 || stdout != "" || !strings.Contains(stderr, "run the command again later") {
 			t.Errorf("account with %s failing: got status %d, stdout %q, stderr %q; want 1 and a hint to run it again", failing, code, stdout, stderr)
 		}
+	}
+	// A token without decimals is only told from an ERC-721 token by its allowance,
+	// so a failure of that call fails the command, rather than reading it as no
+	// token.
+	delete(token.calls, "313ce567")
+	node = &stateNode{blocks: map[uint64]map[ethrpc.Address]stateAccount{200: {stateToken: token}}, failing: "dd62ed3e"}
+	config, request = stateFiles(t, node.serve(t))
+	code, stdout, stderr = runArbot(t, "-config", config, "account", "-request-file", request, stateToken.String())
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "run the command again later") {
+		t.Errorf("account of a token without decimals whose allowance fails: got status %d, stdout %q, stderr %q; want 1 and a hint to run it again", code, stdout, stderr)
 	}
 }

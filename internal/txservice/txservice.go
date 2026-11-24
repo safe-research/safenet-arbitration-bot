@@ -168,11 +168,11 @@ type Execution struct {
 }
 
 // pageSize is the number of results that the client asks for in each request of
-// a listing, and maxListed bounds the number of results of a listing.
-const (
-	pageSize  = 100
-	maxListed = 100_000
-)
+// a listing.
+const pageSize = 100
+
+// MaxListed bounds the number of results of a listing.
+const MaxListed = 100_000
 
 // Executions returns the Safe transactions of safe that the service lists as
 // executed, in the order of their nonces, as it reports them: none of their
@@ -252,7 +252,7 @@ const transferPage = 200
 // Transfers returns the transfers of safe that filter selects and the service
 // lists, from the newest, as it reports them: none of them are checked. The
 // service filters them, so the transfers of other kinds and directions don't
-// count towards maxListed. It returns ErrNotFound if the service doesn't know
+// count towards MaxListed. It returns ErrNotFound if the service doesn't know
 // the Safe.
 func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter TransferFilter) ([]Transfer, error) {
 	// The service rejects addresses without their EIP-55 checksum.
@@ -299,6 +299,12 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 		if err := c.getListing(ctx, base+"/?"+query.Encode(), &page); err != nil {
 			return nil, err
 		}
+		if len(page.Results) == 0 && page.Next != nil {
+			if before == nil {
+				return nil, errors.New("the service lists no transfers, but has a next page")
+			}
+			return nil, fmt.Errorf("the service lists no transfers up to %s, but has a next page", before.Format(time.RFC3339))
+		}
 		var oldest time.Time
 		for i, r := range page.Results {
 			if before != nil && r.ExecutionDate.After(*before) {
@@ -332,8 +338,8 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 		if full && len(transfers) == listed {
 			return nil, fmt.Errorf("the service lists %d transfers or more at %s, more than it lists at once", len(page.Results), oldest.Format(time.RFC3339))
 		}
-		if len(transfers) > maxListed {
-			return nil, fmt.Errorf("the service lists more than %d transfers", maxListed)
+		if len(transfers) > MaxListed {
+			return nil, fmt.Errorf("the service lists more than %d transfers", MaxListed)
 		}
 		if !full {
 			break
@@ -350,7 +356,7 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 
 // list returns the results of the listing of safe at endpoint, such as
 // "multisig-transactions", with the query, in pages of pageSize, up to
-// maxListed.
+// MaxListed.
 func list[T any](ctx context.Context, c *Client, safe ethrpc.Address, endpoint string, query url.Values) ([]T, error) {
 	// The service rejects addresses without their EIP-55 checksum.
 	base, err := url.JoinPath(c.baseURL, "api", "v1", "safes", safe.String(), endpoint)
@@ -371,8 +377,8 @@ func list[T any](ctx context.Context, c *Client, safe ethrpc.Address, endpoint s
 			return nil, err
 		}
 		results = append(results, page.Results...)
-		if len(results) > maxListed {
-			return nil, fmt.Errorf("the service lists more than %d %s", maxListed, endpoint)
+		if len(results) > MaxListed {
+			return nil, fmt.Errorf("the service lists more than %d %s", MaxListed, endpoint)
 		}
 		// A service can list fewer results than it is asked for, and then has a next
 		// page.
