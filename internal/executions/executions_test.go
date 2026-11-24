@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -29,7 +30,8 @@ var (
 // that the decoding sources read.
 type chain struct {
 	logs []ethrpc.Log
-	// nonce is the Safe's nonce at the last block, or nil if reading it fails.
+	// nonce is the Safe's nonce at the last block, 200, or nil if reading it fails,
+	// and at an earlier block, it is less the Safe's executions after it.
 	nonce *big.Int
 	// txs are the transactions by hash.
 	txs map[ethrpc.Hash]ethrpc.Transaction
@@ -51,6 +53,13 @@ type chain struct {
 	// resetting are the methods whose responses the node cuts off with a TCP reset,
 	// as an overloaded proxy does.
 	resetting []string
+
+	mu sync.Mutex
+	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
+	// status 500.
+	failingBlocks []uint64
+	// ranges are the block ranges of the eth_getLogs requests, in order.
+	ranges [][2]uint64
 }
 
 // nodeTimeout is Nethermind's error for a request that ran past its time limit.
@@ -102,6 +111,13 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 		case "eth_getLogs":
 			var filter ethrpc.LogFilter
 			json.Unmarshal(req.Params[0], &filter)
+			c.mu.Lock()
+			c.ranges = append(c.ranges, [2]uint64{uint64(filter.FromBlock), uint64(filter.ToBlock)})
+			c.mu.Unlock()
+			if slices.ContainsFunc(c.failingBlocks, func(b uint64) bool { return b >= uint64(filter.FromBlock) && b <= uint64(filter.ToBlock) }) {
+				http.Error(w, "overloaded", http.StatusInternalServerError)
+				return
+			}
 			logs := []ethrpc.Log{}
 			for _, log := range c.logs {
 				if log.BlockNumber >= filter.FromBlock && log.BlockNumber <= filter.ToBlock &&
@@ -119,11 +135,17 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 				res["result"] = "0x"
 				break
 			}
-			if c.nonce == nil || call.To != safe || block != 200 || string(call.Data) != string(solabi.Call(nonceSelector)) {
+			if c.nonce == nil || call.To != safe || block > 200 || string(call.Data) != string(solabi.Call(nonceSelector)) {
 				fail("execution reverted")
 				break
 			}
-			word := solabi.Uint(c.nonce)
+			nonce := new(big.Int).Set(c.nonce)
+			for _, log := range c.logs {
+				if log.BlockNumber > block && log.BlockNumber <= 200 && log.Topics[0] != multiSigEvent {
+					nonce.Sub(nonce, big.NewInt(1))
+				}
+			}
+			word := solabi.Uint(nonce)
 			res["result"] = ethrpc.Bytes(word[:])
 		case "eth_getTransactionByHash":
 			var hash ethrpc.Hash
