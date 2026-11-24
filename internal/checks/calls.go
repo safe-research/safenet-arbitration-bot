@@ -163,12 +163,12 @@ func (r *CallReader) Calls(ctx context.Context, tx *safenet.SafeTransaction) (*T
 	}
 
 	report := &TransactionCalls{ChainID: r.chainID, SafeBlock: uint64(r.block), Safe: *safe, Calls: []Call{}}
-	if report.Target, err = r.account(ctx, tx.To); err != nil {
+	if report.Target, err = r.Account(ctx, tx.To); err != nil {
 		return nil, err
 	}
 	own := call{to: tx.To, value: tx.Value, data: tx.Data, operation: tx.Operation, kind: Root}
 	for _, c := range components.calls {
-		to, err := r.account(ctx, c.to)
+		to, err := r.Account(ctx, c.to)
 		if err != nil {
 			return nil, err
 		}
@@ -231,8 +231,10 @@ func (r *CallReader) safeOf(ctx context.Context) (*SafeAccount, error) {
 	return safe, nil
 }
 
-// account returns an account that the Safe calls.
-func (r *CallReader) account(ctx context.Context, address ethrpc.Address) (Account, error) {
+// Account returns the account at address as the calls that the reader decodes
+// have it: its code, whether it is the reader's Safe, and the contract of a
+// Safe version of § 2.1 that it is, if any.
+func (r *CallReader) Account(ctx context.Context, address ethrpc.Address) (Account, error) {
 	c, err := r.code(ctx, address)
 	if err != nil {
 		return Account{}, err

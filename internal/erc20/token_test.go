@@ -1,0 +1,200 @@
+package erc20
+
+import (
+	"encoding/json"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
+)
+
+// contract answers a call with result, or reverts if result is nil, or halts
+// with the error halt if it is set, or fails with a node error if failing is
+// set, or with HTTP status 500 and a body that says that the call reverted if
+// overloaded is set.
+type contract struct {
+	results    map[[4]byte][]byte
+	halt       string
+	failing    bool
+	overloaded bool
+}
+
+// callNode starts a node that answers eth_call to the contracts at block 100,
+// and returns a client for it.
+func callNode(t *testing.T, contracts map[ethrpc.Address]contract) *ethrpc.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     uint64            `json:"id"`
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		res := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		switch req.Method {
+		case "eth_chainId":
+			res["result"] = "0x1"
+		case "eth_call":
+			var call ethrpc.CallRequest
+			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[0], &call)
+			json.Unmarshal(req.Params[1], &block)
+			c, ok := contracts[call.To]
+			var selector [4]byte
+			copy(selector[:], call.Data)
+			result, has := c.results[selector]
+			switch {
+			case c.overloaded:
+				// A server error, which some nodes send with a JSON-RPC error in the body that
+				// doesn't come from running the call.
+				w.WriteHeader(http.StatusInternalServerError)
+				res["error"] = map[string]any{"code": 3, "message": "execution reverted: upstream overloaded"}
+			case c.failing:
+				res["error"] = map[string]any{"code": -32000, "message": "header not found"}
+			case c.halt != "":
+				// Reth answers a call that halts with code -32003, at HTTP status 200.
+				res["error"] = map[string]any{"code": -32003, "message": c.halt}
+			case !ok || block != 100:
+				// An account without code returns nothing.
+				res["result"] = "0x"
+			case !has:
+				res["error"] = map[string]any{"code": 3, "message": "execution reverted"}
+			default:
+				res["result"] = ethrpc.Bytes(result)
+			}
+		default:
+			res["error"] = map[string]any{"code": -32601, "message": "method not found"}
+		}
+		json.NewEncoder(w).Encode(res)
+	}))
+	t.Cleanup(server.Close)
+	eth, err := ethrpc.NewClient(t.Context(), ethrpc.Mainnet, server.URL)
+	if err != nil {
+		t.Fatalf("ethrpc.NewClient: %v", err)
+	}
+	return eth
+}
+
+func TestRead(t *testing.T) {
+	balance, _ := new(big.Int).SetString("26199343952008652136834", 10)
+	token := contract{results: map[[4]byte][]byte{
+		decimalsSelector:    solabi.Encode(uint64(18)),
+		balanceOfSelector:   solabi.Encode(balance),
+		nameSelector:        solabi.Encode("Token \x1b[31mA"),
+		symbolSelector:      solabi.Encode("TKA"),
+		totalSupplySelector: solabi.Encode(uint64(1e9)),
+		allowanceSelector:   solabi.Encode(uint64(7)),
+	}}
+	// A token without a name, and whose symbol is a bytes32, as some old tokens
+	// have.
+	var symbol [32]byte
+	copy(symbol[:], "TKB")
+	tokenWithoutStrings := contract{results: map[[4]byte][]byte{
+		decimalsSelector:  solabi.Encode(uint64(6)),
+		balanceOfSelector: solabi.Encode(big.NewInt(0)),
+		symbolSelector:    symbol[:],
+	}}
+	// A token without decimals, which are optional, but with an allowance.
+	tokenWithoutDecimals := contract{results: map[[4]byte][]byte{
+		balanceOfSelector: solabi.Encode(uint64(3)),
+		allowanceSelector: solabi.Encode(uint64(0)),
+	}}
+	eth := callNode(t, map[ethrpc.Address]contract{tokenA: token, tokenB: tokenWithoutStrings, alice: tokenWithoutDecimals})
+
+	got, err := Read(t.Context(), eth, tokenA, safe, 100)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got == nil || got.Name != "Token \x1b[31mA" || got.Symbol != "TKA" || got.Decimals == nil || *got.Decimals != 18 || got.Balance.Cmp(balance) != 0 ||
+		got.TotalSupply == nil || got.TotalSupply.Int64() != 1e9 {
+		t.Errorf("Read: got %+v, want the token's name, symbol, 18 decimals, total supply 1e9, and balance %s", got, balance)
+	}
+	got, err = Read(t.Context(), eth, tokenB, safe, 100)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got == nil || got.Name != "" || got.Symbol != "" || got.Decimals == nil || *got.Decimals != 6 || got.Balance.Sign() != 0 || got.TotalSupply != nil {
+		t.Errorf("Read of a token without strings: got %+v, want no name, symbol, or total supply, 6 decimals, and no balance", got)
+	}
+	got, err = Read(t.Context(), eth, alice, safe, 100)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got == nil || got.Decimals != nil || got.Balance.Int64() != 3 {
+		t.Errorf("Read of a token without decimals: got %+v, want no decimals and a balance of 3", got)
+	}
+}
+
+func TestAllowance(t *testing.T) {
+	invalid := ethrpc.Address{19: 0xfe}
+	eth := callNode(t, map[ethrpc.Address]contract{
+		tokenA: {results: map[[4]byte][]byte{allowanceSelector: solabi.Encode(uint64(7))}},
+		// A contract whose allowance reverts, and one whose allowance halts.
+		tokenB:  {results: map[[4]byte][]byte{}},
+		invalid: {halt: "EVM error: InvalidFEOpcode"},
+		alice:   {failing: true},
+	})
+	if got, err := Allowance(t.Context(), eth, tokenA, safe, bob, 100); err != nil || got == nil || got.Int64() != 7 {
+		t.Errorf("Allowance: got %v and error %v, want 7", got, err)
+	}
+	// An account that doesn't answer has no allowance, and one without code returns
+	// nothing.
+	for _, account := range []ethrpc.Address{tokenB, invalid, bob} {
+		if got, err := Allowance(t.Context(), eth, account, safe, bob, 100); got != nil || err != nil {
+			t.Errorf("Allowance(%s): got %v and error %v, want nil", account, got, err)
+		}
+	}
+	if _, err := Allowance(t.Context(), eth, alice, safe, bob, 100); err == nil {
+		t.Error("Allowance with a failing node: expected an error")
+	}
+}
+
+func TestReadNotAToken(t *testing.T) {
+	invalid, loop, nft := ethrpc.Address{19: 0xfe}, ethrpc.Address{19: 0x5b}, ethrpc.Address{19: 0x72}
+	eth := callNode(t, map[ethrpc.Address]contract{
+		// A contract whose calls revert.
+		tokenA: {results: map[[4]byte][]byte{}},
+		// A contract with decimals, but no balanceOf.
+		tokenB: {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode(uint64(18))}},
+		// A contract whose decimals don't fit in a uint8, and an ERC-721 token, which
+		// has a balanceOf, but neither decimals nor an allowance.
+		alice: {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode(uint64(256)), balanceOfSelector: solabi.Encode(uint64(1))}},
+		nft: {results: map[[4]byte][]byte{
+			balanceOfSelector: solabi.Encode(uint64(2)), totalSupplySelector: solabi.Encode(uint64(10_000)), symbolSelector: solabi.Encode("NFT"),
+		}},
+		// Contracts whose code is the invalid opcode 0xfe, and a loop that runs out of
+		// gas.
+		invalid: {halt: "EVM error: InvalidFEOpcode"},
+		loop:    {halt: "out of gas: gas required exceeds: 50000000"},
+	})
+	for _, account := range []ethrpc.Address{tokenA, tokenB, alice, bob, invalid, loop, nft} {
+		if got, err := Read(t.Context(), eth, account, safe, 100); got != nil || err != nil {
+			t.Errorf("Read(%s): got %+v and error %v, want nil", account, got, err)
+		}
+	}
+}
+
+func TestReadFailure(t *testing.T) {
+	// A node error other than a revert fails, rather than saying the account isn't
+	// a token.
+	eth := callNode(t, map[ethrpc.Address]contract{tokenA: {failing: true}, tokenB: {overloaded: true}})
+	if _, err := Read(t.Context(), eth, tokenA, safe, 100); err == nil || !strings.Contains(err.Error(), "header not found") {
+		t.Errorf("Read with a failing node: got error %v, want the node's", err)
+	}
+	// So does a transient error, even if its message names a revert, since the node
+	// didn't answer.
+	_, err := Read(t.Context(), eth, tokenB, safe, 100)
+	if err == nil || !ethrpc.Transient(err) {
+		t.Errorf("Read with an overloaded node: got error %v, want a transient error", err)
+	}
+	if _, err := Allowance(t.Context(), eth, tokenB, safe, bob, 100); err == nil || !ethrpc.Transient(err) {
+		t.Errorf("Allowance with an overloaded node: got error %v, want a transient error", err)
+	}
+}

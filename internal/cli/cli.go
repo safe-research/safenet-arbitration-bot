@@ -30,6 +30,7 @@ var commands = map[string]struct {
 	run         func(ctx context.Context, e *env, args []string) error
 	description string
 }{
+	"account":         {accountCommand, "show an account on the Safe's chain of a Safenet request, such as a recipient or a token"},
 	"calls":           {callsCommand, "list the calls that the Safe of a Safenet request makes, as the checks judge them"},
 	"charter":         {charter, "fetch the Safenet Arbitration Charter"},
 	"events":          {eventsCommand, "list the events that a transaction logged, on the Safe's chain of a Safenet request"},
@@ -136,4 +137,12 @@ func parse(flags *flag.FlagSet, args []string, n int) error {
 		return usageError("")
 	}
 	return nil
+}
+
+// isSet reports whether the flag name was set, which tells a zero that was set
+// from the default.
+func isSet(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
