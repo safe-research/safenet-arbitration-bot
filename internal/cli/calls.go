@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/checks"
@@ -30,11 +31,18 @@ func callsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "pays the largest gas refund that the transaction allows, if any, where the zero address as its\n")
 		fmt.Fprintf(out, "recipient means the account that executes the transaction. Each account that the Safe calls has its\n")
 		fmt.Fprintf(out, "code hash and size, and the contract of a § 2.1 version that it is, identified by its address on the\n")
-		fmt.Fprintf(out, "networks that the Charter covers if it has code. The text output shortens long data; -json has it all.\n\n")
+		fmt.Fprintf(out, "networks that the Charter covers if it has code, and CreateCall by its code hash too. The text output\n")
+		fmt.Fprintf(out, "shortens long data; -json has it all.\n\n")
 		fmt.Fprintf(out, "Each call's data is decoded as a well-known function, if it is one: ERC-20 transfer, transferFrom,\n")
 		fmt.Fprintf(out, "and approve, the Safe's execTransaction, with the data of the call that it makes decoded the same way,\n")
-		fmt.Fprintf(out, "and the Safe proxy factories' createProxyWithNonce. Data is decoded by its selector and ABI layout only,\n")
-		fmt.Fprintf(out, "so what a call does depends on the account that it is to.\n\n")
+		fmt.Fprintf(out, "the Safe proxy factories' createProxyWithNonce, and CreateCall's performCreate and performCreate2.\n")
+		fmt.Fprintf(out, "Data is decoded by its selector and ABI layout only, so what a call does depends on the account that\n")
+		fmt.Fprintf(out, "it is to.\n\n")
+		fmt.Fprintf(out, "A call to the CreateCall contract of a § 2.1 version has the address of the contract that it would\n")
+		fmt.Fprintf(out, "deploy, derived from its data: with CREATE2, from the deployer, salt, and init code, and with CREATE,\n")
+		fmt.Fprintf(out, "from the deployer's nonce at the Safe block and the deployments of the calls before it. The deployer is\n")
+		fmt.Fprintf(out, "the CreateCall for a call, whose nonce anyone's deployment through it can change before the transaction\n")
+		fmt.Fprintf(out, "is executed, and the Safe for a delegate call.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
@@ -70,7 +78,34 @@ func callsCommand(ctx context.Context, e *env, args []string) error {
 		}
 		fmt.Fprintf(w, "%d\t%s\t%s\n", i+1, callText(c), data)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	printCreations(e, report.Calls)
+	return nil
+}
+
+// printCreations lists the contracts that calls would deploy, with the inputs
+// that their addresses are derived from, if any.
+func printCreations(e *env, calls []checks.Call) {
+	var creations []string
+	for i, c := range calls {
+		cr := c.Creates
+		if cr == nil {
+			continue
+		}
+		var inputs string
+		if cr.Salt != nil {
+			inputs = "salt " + cr.Salt.String()
+		} else {
+			inputs = fmt.Sprintf("nonce %d", *cr.Nonce)
+		}
+		creations = append(creations, fmt.Sprintf("  call %d  %s (%s by %s, %s, init code hash %s)",
+			i+1, cr.Address, strings.ToUpper(cr.Method), cr.Deployer, inputs, cr.InitCodeHash))
+	}
+	if len(creations) > 0 {
+		fmt.Fprintf(e.stdout, "\nContracts that the calls would deploy, derived from their data\n\n%s\n", strings.Join(creations, "\n"))
+	}
 }
 
 // callText describes a call in the KIND, TO, ACCOUNT, OPERATION, VALUE, and
