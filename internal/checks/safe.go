@@ -84,6 +84,26 @@ var singletons = map[ethrpc.Address]string{
 	ethrpc.MustParseAddress("0xEdd160fEBBD92E350D4D398fb636302fccd67C7e"): "1.5.0+L2",
 }
 
+// proxyFactories are the official proxy factories of the proxy versions that
+// the Charter lists in § 2.1 whose ProxyCreation event has the proxy and the
+// singleton, by version: 1.3.0, at its canonical and EIP-155 addresses, 1.4.1,
+// and 1.5.0. The 1.0.0 and 1.1.1 factories log ProxyCreation(address), which
+// internal/events doesn't decode. Like the singletons, the safe-deployments
+// repository lists each of them on every network that the Charter covers, and
+// they are deterministic deployments.
+var proxyFactories = map[ethrpc.Address]string{
+	ethrpc.MustParseAddress("0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2"): "1.3.0",
+	ethrpc.MustParseAddress("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC"): "1.3.0",
+	ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"): "1.4.1",
+	ethrpc.MustParseAddress("0x14F2982D601c9458F93bd70B218933A6f8165e7b"): "1.5.0",
+}
+
+// ProxyFactoryVersion returns the version of the official proxy factory of
+// proxyFactories at address, or "" if it isn't one.
+func ProxyFactoryVersion(address ethrpc.Address) string {
+	return proxyFactories[address]
+}
+
 // unsupportedSafe finds a call by an account that isn't a Safe insecure, under
 // R-4.0 of the Charter
 // (bafkreigg6ajqdb52kb644wcxegurt7r6jlclru4mjy3lwxkbh6avm3vgre): a transaction

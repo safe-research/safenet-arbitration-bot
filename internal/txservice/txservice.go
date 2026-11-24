@@ -207,6 +207,25 @@ func (c *Client) known(ctx context.Context, safe ethrpc.Address) error {
 	return c.get(ctx, u+"/", &struct{}{})
 }
 
+// Creation returns the hash of the transaction that the service says created
+// the Safe, or ErrNotFound.
+func (c *Client) Creation(ctx context.Context, safe ethrpc.Address) (ethrpc.Hash, error) {
+	u, err := url.JoinPath(c.baseURL, "api", "v1", "safes", safe.String(), "creation")
+	if err != nil {
+		return ethrpc.Hash{}, err
+	}
+	var result struct {
+		TransactionHash *ethrpc.Hash `json:"transactionHash"`
+	}
+	if err := c.get(ctx, u+"/", &result); err != nil {
+		return ethrpc.Hash{}, err
+	}
+	if result.TransactionHash == nil {
+		return ethrpc.Hash{}, ErrNotFound
+	}
+	return *result.TransactionHash, nil
+}
+
 // getListing is get for a page of a listing, which is never ErrNotFound: the
 // service lists nothing for a Safe that it doesn't know, rather than fail, so a
 // listing that it doesn't have is at a wrong URL.
