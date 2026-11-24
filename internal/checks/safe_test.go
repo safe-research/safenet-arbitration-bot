@@ -119,6 +119,27 @@ func (n *fakeNode) dialer(t *testing.T, block uint64) ethrpc.Dialer {
 	}
 }
 
+func TestProxyFactoryVersion(t *testing.T) {
+	factory111 := ethrpc.MustParseAddress("0x76E2cFc1F5Fa8F6a5b3fC4c8F4788F0116861F9B")
+	factory141 := ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67")
+	for _, test := range []struct {
+		address ethrpc.Address
+		chainID uint64
+		want    string
+	}{
+		{factory111, ethrpc.Mainnet, "1.1.1"},
+		{factory111, ethrpc.Gnosis, "1.1.1"},
+		// The 1.1.1 factory's address has other code on Arbitrum One.
+		{factory111, ethrpc.ArbitrumOne, ""},
+		{factory141, ethrpc.ArbitrumOne, "1.4.1"},
+		{ethrpc.Address{19: 1}, ethrpc.Mainnet, ""},
+	} {
+		if got := ProxyFactoryVersion(test.address, test.chainID); got != test.want {
+			t.Errorf("ProxyFactoryVersion(%s, %d): got %q, want %q", test.address, test.chainID, got, test.want)
+		}
+	}
+}
+
 func TestUnsupportedSafe(t *testing.T) {
 	safe130 := ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552")
 	safeL2130 := ethrpc.MustParseAddress("0xfb1bffC9d739B8D520DaF37dF666da4C687191EA")

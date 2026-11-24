@@ -37,16 +37,20 @@ type History struct {
 	// Creation is the creation of the Safe's account, if the service has it and the
 	// chain confirms its block, or nil.
 	Creation *Creation
-	// setBack is whether the nonces of the executions found show that a delegate
-	// call set the Safe's nonce back.
-	setBack bool
+	// uncounted is whether the Safe's nonce may not count the executions: their
+	// nonces show that a delegate call set it back, or a delegate call left it
+	// other than one above the highest nonce of its block, or it couldn't be read
+	// there, or an execution is unknown, which may be a delegate call.
+	uncounted bool
 }
 
 // Complete reports whether the executions found account for every nonce below
 // the Safe's nonce, and the nonce counts the executions: none of them shows
-// that a delegate call set it back.
+// that a delegate call set it back, the nonce is one above the highest nonce of
+// each block with a delegate call, which the node can read, and no execution is
+// unknown.
 func (h *History) Complete() bool {
-	return h.Missing != nil && len(h.Missing) == 0 && !h.setBack
+	return h.Missing != nil && len(h.Missing) == 0 && !h.uncounted
 }
 
 // NonceRange is a range of nonces, From to To, including both.
@@ -107,7 +111,9 @@ type Rejected struct {
 // they aren't found. Any other request to the node that fails, such as for a
 // rate limit, fails FindAll, since it says nothing about the history, unless it
 // reads the Safe's nonce at an execution's block and another source has the
-// transaction (see Finder.Eth).
+// transaction (see Finder.Eth). A nonce at a block with a delegate call that
+// the node has no answer for, such as at a block whose state it doesn't keep,
+// only leaves the history incomplete.
 func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber) (*History, error) {
 	if f.Service == nil {
 		return nil, errors.New("finding every execution needs the Safe Transaction Service")
@@ -194,10 +200,70 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	} else {
 		f.warn(fmt.Errorf("the Safe's nonce %s is too large to list the nonces that no execution used", nonce))
 	}
-	if h.setBack = setBack(h.Executions); h.setBack {
+	if h.uncounted = setBack(h.Executions); h.uncounted {
 		f.warn(errors.New("the nonces of the executions found show that a delegate call set the Safe's nonce back, so the nonce doesn't count the executions"))
+	} else if h.Missing != nil && len(h.Missing) == 0 {
+		counted, err := d.countedAfterDelegateCalls(ctx)
+		if err != nil {
+			return nil, err
+		}
+		h.uncounted = !counted
 	}
 	return h, nil
+}
+
+// countedAfterDelegateCalls reports whether, at the end of each block with an
+// execution found that is a delegate call, the Safe's nonce is one above the
+// highest nonce of the block's executions found, as executions leave it. A
+// delegate call can set the nonce to anything, which the nonces of the
+// executions only show if both executions of a reused nonce are found. A
+// delegate call to MultiSendCallOnly makes no delegate calls, so it can't, but
+// an unknown execution may be any delegate call. It warns about each block
+// where the nonce isn't, once about those where it can't be read, such as at a
+// block whose state the node doesn't keep, and once about unknown executions. A
+// read that fails transiently, such as for a rate limit, returns its error
+// instead, since it says nothing about the nonce.
+func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
+	highest := make(map[uint64]*big.Int)
+	var blocks []uint64
+	unknown := false
+	for _, e := range d.executions {
+		tx := e.Transaction
+		if tx == nil {
+			unknown = true
+			continue
+		}
+		if n := highest[e.Block]; n == nil || tx.Nonce.Cmp(n) > 0 {
+			highest[e.Block] = tx.Nonce
+		}
+		if tx.Operation == safenet.OperationDelegateCall && !checks.MultiSendCallOnly(tx.To) && !slices.Contains(blocks, e.Block) {
+			blocks = append(blocks, e.Block)
+		}
+	}
+	counted, unread := true, 0
+	for _, block := range blocks {
+		next, err := d.nonceAt(ctx, block)
+		if ethrpc.Transient(err) {
+			return false, err
+		}
+		want := new(big.Int).Add(highest[block], big.NewInt(1))
+		switch {
+		case next == nil:
+			unread++
+		case next.Cmp(want) != 0:
+			d.warn(fmt.Errorf("the Safe's nonce at the end of block %d, which has a delegate call, is %s rather than %s, one above the highest nonce of its executions, so the nonce doesn't count the executions", block, next, want))
+			counted = false
+		}
+	}
+	if unread > 0 {
+		d.warn(fmt.Errorf("the Safe's nonce at the end of %d blocks with a delegate call is unknown, so it may not count the executions", unread))
+		counted = false
+	}
+	if unknown {
+		d.warn(errors.New("an execution found is unknown, so it may be a delegate call that changed the Safe's nonce"))
+		counted = false
+	}
+	return counted, nil
 }
 
 // setBack reports whether the nonces of the known transactions of executions,
@@ -463,7 +529,7 @@ func (f *Finder) CreationFromService(ctx context.Context, safe ethrpc.Address, t
 		c.TxHash = &hash
 	}
 	for _, log := range receipt.Logs {
-		if log.Removed || checks.ProxyFactoryVersion(log.Address) == "" {
+		if log.Removed || checks.ProxyFactoryVersion(log.Address, f.Eth.ChainID()) == "" {
 			continue
 		}
 		if e := events.Decode(log); e != nil && e.Name == "ProxyCreation" && e.Args[0].Value == safe {
@@ -473,7 +539,7 @@ func (f *Finder) CreationFromService(ctx context.Context, safe ethrpc.Address, t
 		}
 	}
 	if c.TxHash == nil {
-		f.warn(fmt.Errorf("the Safe Transaction Service names %s as the creation of %s, but it neither creates the account nor logs a ProxyCreation event of it from an official 1.3.0, 1.4.1, or 1.5.0 proxy factory, so only its block %d is reported", hash, safe, block))
+		f.warn(fmt.Errorf("the Safe Transaction Service names %s as the creation of %s, but it neither creates the account nor logs a ProxyCreation event of it from an official proxy factory, so only its block %d is reported", hash, safe, block))
 	}
 	return c, nil
 }
