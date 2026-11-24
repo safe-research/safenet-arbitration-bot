@@ -96,14 +96,51 @@ func TestScanLogsHalvesRangeOnError(t *testing.T) {
 		t.Errorf("blocks: got %v, want %v", got, want)
 	}
 	wantRanges := [][2]BlockNumber{
-		{100, 6_000}, // 10,000 blocks, capped to the filter
-		{100, 5_099}, // 5,000 blocks
-		{100, 2_599}, // 2,500 blocks
+		{100, 6_000},   // 10,000 blocks, capped to the filter
+		{100, 5_099},   // 5,000 blocks
+		{100, 2_599},   // 2,500 blocks
+		{2_600, 6_000}, // doubled again, which fails
 		{2_600, 5_099},
 		{5_100, 6_000},
 	}
 	if !slices.Equal(*ranges, wantRanges) {
 		t.Errorf("ranges: got %v, want %v", *ranges, wantRanges)
+	}
+}
+
+func TestScanLogsDoublesRangeAfterBurst(t *testing.T) {
+	fastRateLimitRetries(t)
+	// A node that answers the first requests with -32005 and EIP-1474's "Limit
+	// exceeded", as for a brief rate limit, halves the range down to 50 blocks, but
+	// it doubles back once chunks succeed.
+	var requests atomic.Int64
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		res := map[string]any{"jsonrpc": "2.0", "id": id, "result": []Log{}}
+		if requests.Add(1) <= 9 {
+			delete(res, "result")
+			res["error"] = map[string]any{"code": -32005, "message": "Limit exceeded"}
+		}
+		json.NewEncoder(w).Encode(res)
+	})
+	scan(t, connect(t, url), LogFilter{FromBlock: 0, ToBlock: 99_999})
+	// The 9 requests of the burst, the retry of 50 blocks, the 7 chunks of 100 to
+	// 6,400 blocks, and 9 chunks of up to 10,000 blocks for the rest, against 10
+	// requests without the burst, and 2,009 if the range never doubled.
+	if want := int64(9 + 1 + 7 + 9); requests.Load() != want {
+		t.Errorf("ScanLogs: sent %d requests, want %d", requests.Load(), want)
+	}
+}
+
+func TestScanLogsDoublesRangeLessOften(t *testing.T) {
+	// A node that limits the range to 1,000 blocks fails each chunk that doubles to
+	// 1,250 blocks, so the doubling waits for twice as many chunks each time.
+	client, ranges := logNode(t, 1_000)
+	scan(t, client, LogFilter{FromBlock: 0, ToBlock: 99_999})
+	// 4 halvings down to 625 blocks, 160 chunks of 625 blocks, and 7 doublings,
+	// after 1, 3, 7, 15, 31, 63, and 127 chunks, against 164 requests if the range
+	// never doubled.
+	if want := 4 + 160 + 7; len(*ranges) != want {
+		t.Errorf("ScanLogs: sent %d requests, want %d", len(*ranges), want)
 	}
 }
 

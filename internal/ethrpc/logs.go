@@ -10,7 +10,8 @@ import (
 // and only report the limit in an error message, whose format varies. ScanLogs
 // starts with chunks of maxLogRange blocks, and halves them down to minLogRange
 // blocks while the node answers with JSON-RPC errors, other than with HTTP
-// status 429 or a server error, or a rate limit.
+// status 429 or a server error, or a rate limit. It doubles them again after
+// chunks succeed, since the error may have been brief.
 var (
 	maxLogRange uint64 = 10_000
 	minLogRange uint64 = 50
@@ -21,7 +22,10 @@ var (
 // yielded with a zero Log. Stopping early saves querying the remaining chunks.
 func (c *Client) ScanLogs(ctx context.Context, filter LogFilter) iter.Seq2[Log, error] {
 	return func(yield func(Log, error) bool) {
-		step := maxLogRange
+		// A node that does limit the range fails a chunk that was doubled again, so
+		// each time that happens, twice as many chunks must succeed before the next
+		// doubling: wait of them, of which succeeded have since the last change.
+		step, wait, succeeded, doubled := maxLogRange, 1, 0, false
 		for from := filter.FromBlock; from <= filter.ToBlock; {
 			chunk := filter
 			chunk.FromBlock = from
@@ -38,7 +42,10 @@ func (c *Client) ScanLogs(ctx context.Context, filter LogFilter) iter.Seq2[Log, 
 			// A JSON-RPC error may be about the range. An HTTP rate limit or server error
 			// isn't, nor is a rate limit, and a smaller range only means more requests.
 			if _, ok := errors.AsType[*Error](err); ok && !refused(err) && !throttled(err) && step > minLogRange {
-				step = max(step/2, minLogRange)
+				if doubled {
+					wait *= 2
+				}
+				step, succeeded, doubled = max(step/2, minLogRange), 0, false
 				continue
 			}
 			if err != nil {
@@ -54,6 +61,11 @@ func (c *Client) ScanLogs(ctx context.Context, filter LogFilter) iter.Seq2[Log, 
 				return
 			}
 			from = chunk.ToBlock + 1
+			if succeeded++; succeeded >= wait && step < maxLogRange {
+				step, succeeded, doubled = min(2*step, maxLogRange), 0, true
+			} else {
+				doubled = false
+			}
 		}
 	}
 }

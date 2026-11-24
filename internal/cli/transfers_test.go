@@ -155,11 +155,11 @@ func (c *historyChain) serve(t *testing.T) string {
 
 // historyService is a fake Safe Transaction Service for Ethereum Mainnet that
 // knows the Safe, and lists its executions and transfers, and has the
-// transactions by Safe transaction hash, or fails with HTTP status 500 if
-// failing. Like the service, it lists nothing for a Safe that it doesn't know,
-// which is any Safe if unknown. It filters the transfers by kind, sender, and
-// recipient, but not by block, as a service that misfilters would, and keeps
-// the queries for them.
+// transactions by Safe transaction hash and an about page, or fails with HTTP
+// status 500 if failing. Like the service, it lists nothing for a Safe that it
+// doesn't know, which is any Safe if unknown. It filters the transfers by kind,
+// sender, and recipient, but not by block, as a service that misfilters would,
+// and keeps the queries for them.
 type historyService struct {
 	executions   []map[string]any
 	transactions map[ethrpc.Hash]map[string]any
@@ -176,6 +176,10 @@ func (s *historyService) serve(t *testing.T) string {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.failing {
 			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == "/api/v1/about/" {
+			json.NewEncoder(w).Encode(map[string]any{"name": "Safe Transaction Service"})
 			return
 		}
 		if id, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/"); ok {

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -54,12 +55,22 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("HTTP %s: %q", e.Status, e.Body)
 }
 
+// notJSON is a response with HTTP status 200 whose body isn't JSON, such as an
+// empty body or a proxy's HTML page, which isn't the service's answer.
+type notJSON struct{ error }
+
+func (e notJSON) Unwrap() error { return e.error }
+
 // Unavailable reports whether err is a failure to get an answer from the
-// service, such as a rate limit, a server error, or a dropped connection, as
-// ethrpc.Transient is for a node, rather than its answer.
+// service, such as a rate limit, a server error, a page that isn't JSON, or a
+// dropped connection, as ethrpc.Transient is for a node, rather than its
+// answer.
 func Unavailable(err error) bool {
 	if statusErr, ok := errors.AsType[*StatusError](err); ok {
 		return statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode >= 500
+	}
+	if _, ok := errors.AsType[notJSON](err); ok {
+		return true
 	}
 	return ethrpc.Transient(err)
 }
@@ -69,6 +80,10 @@ type Client struct {
 	http    *http.Client
 	baseURL string
 	chainID *big.Int
+	// confirming asks for the about page of the server at baseURL once, and
+	// confirmErr is its error if it didn't answer as a service.
+	confirming sync.Once
+	confirmErr error
 }
 
 // NewClient returns a client for the service at the base URL baseURL, such as
@@ -93,10 +108,42 @@ func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*safe
 	}
 	// The service redirects paths without a trailing slash.
 	var t transaction
-	if err := c.get(ctx, u+"/", &t); err != nil {
+	err = c.get(ctx, u+"/", &t)
+	// The service answers 404 for a transaction that it doesn't have, but so does
+	// any server for a wrong URL.
+	if errors.Is(err, ErrNotFound) {
+		if err := c.confirm(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return t.safeTransaction(c.chainID), nil
+}
+
+// confirm returns an error unless the server at the base URL is a service,
+// which answers its about page. It asks once, and remembers the answer.
+func (c *Client) confirm(ctx context.Context) error {
+	c.confirming.Do(func() { c.confirmErr = c.about(ctx) })
+	return c.confirmErr
+}
+
+// about returns an error unless the server at the base URL answers the about
+// page of a service.
+func (c *Client) about(ctx context.Context) error {
+	u, err := url.JoinPath(c.baseURL, "api", "v1", "about")
+	if err != nil {
+		return err
+	}
+	err = c.get(ctx, u+"/", &struct{}{})
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("HTTP 404 Not Found: the service at %q has no about page, so it isn't a Safe Transaction Service", c.baseURL)
+	}
+	if err != nil {
+		return fmt.Errorf("getting the about page of the service at %q: %w", c.baseURL, err)
+	}
+	return nil
 }
 
 // Execution is a Safe transaction that the service lists as executed, with the
@@ -401,6 +448,10 @@ func (c *Client) get(ctx context.Context, u string, v any) error {
 		return fmt.Errorf("response exceeds %d bytes", maxResponseSize)
 	}
 	if err := json.Unmarshal(body, v); err != nil {
+		// JSON that doesn't decode is the service's answer, if a malformed one.
+		if !json.Valid(body) {
+			err = notJSON{err}
+		}
 		return fmt.Errorf("decoding response: %w", err)
 	}
 	return nil

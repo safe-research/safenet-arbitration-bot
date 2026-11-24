@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -507,6 +508,25 @@ func TestRequestMismatchedID(t *testing.T) {
 	}
 }
 
+func TestRequestNullID(t *testing.T) {
+	// A node may answer a request that it rejects with an error and a null ID, as
+	// 1RPC answers a method that it doesn't allow, which is its answer. A result
+	// with a null ID isn't.
+	for _, test := range []struct {
+		body   string
+		answer bool
+	}{
+		{`{"jsonrpc":"2.0","error":{"code":-32600,"message":"Method debug_traceTransaction not allowed"},"id":null}`, true},
+		{`{"jsonrpc":"2.0","result":"0x","id":null}`, false},
+	} {
+		url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) { w.Write([]byte(test.body)) })
+		err := connect(t, url).RawRequest(t.Context(), nil, "debug_traceTransaction", Hash{})
+		if rpcErr, ok := errors.AsType[*Error](err); ok != test.answer || Transient(err) == test.answer || ok && rpcErr.Code != -32600 {
+			t.Errorf("%s: RawRequest got %v, want an answer %t", test.body, err, test.answer)
+		}
+	}
+}
+
 func TestNewClientVerifiesChainID(t *testing.T) {
 	var requests atomic.Int64
 	url, chainIDRequests := node(t, "0x64", func(w http.ResponseWriter, id uint64) {
@@ -606,12 +626,35 @@ func TestRequestNotAnswered(t *testing.T) {
 
 func TestRequestHTTPErrorType(t *testing.T) {
 	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
-		http.Error(w, "unavailable", http.StatusInternalServerError)
+		http.Error(w, "\x1b[31munavailable", http.StatusInternalServerError)
 	})
 	_, err := connect(t, url).Call(t.Context(), CallRequest{}, 1)
 	httpErr, ok := errors.AsType[*HTTPError](err)
-	if !ok || httpErr.StatusCode != 500 || httpErr.Body != "unavailable" || !Transient(err) {
+	if !ok || httpErr.StatusCode != 500 || httpErr.Body != "\x1b[31munavailable" || !Transient(err) {
 		t.Errorf("Call: got %v, want a transient *HTTPError with status 500", err)
+	}
+	// The body isn't trusted, so the error quotes it.
+	if want := `HTTP 500 Internal Server Error: "\x1b[31munavailable"`; !strings.HasSuffix(fmt.Sprint(err), want) {
+		t.Errorf("Call: got error %q, want one ending in %q", err, want)
+	}
+}
+
+func TestNullResult(t *testing.T) {
+	// A null result is no answer, rather than empty return data, no code, a zero
+	// slot, or block 0.
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": nil})
+	})
+	client := connect(t, url)
+	for name, request := range map[string]func() (any, error){
+		"Call":         func() (any, error) { return client.Call(t.Context(), CallRequest{}, 1) },
+		"BlockNumber":  func() (any, error) { return client.BlockNumber(t.Context()) },
+		"GetCode":      func() (any, error) { return client.GetCode(t.Context(), Address{}, 1) },
+		"GetStorageAt": func() (any, error) { return client.GetStorageAt(t.Context(), Address{}, Hash{}, 1) },
+	} {
+		if got, err := request(); err == nil || !strings.Contains(err.Error(), "null result") {
+			t.Errorf("%s: got %v, %v; want an error about the null result", name, got, err)
+		}
 	}
 }
 
