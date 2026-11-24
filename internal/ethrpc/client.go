@@ -133,16 +133,14 @@ func (c *Client) GetCode(ctx context.Context, address Address, block BlockNumber
 // GetBalance returns the balance of address, in wei, as of block
 // (eth_getBalance).
 func (c *Client) GetBalance(ctx context.Context, address Address, block BlockNumber) (*big.Int, error) {
-	var result string
+	var result *BigQuantity
 	if err := c.RawRequest(ctx, &result, "eth_getBalance", address, block); err != nil {
 		return nil, err
 	}
-	digits, ok := strings.CutPrefix(result, "0x")
-	balance, valid := new(big.Int).SetString(digits, 16)
-	if !ok || !valid || strings.ContainsAny(digits, "+-") {
-		return nil, fmt.Errorf("eth_getBalance: invalid quantity %q", result)
+	if result == nil {
+		return nil, fmt.Errorf("eth_getBalance: null result for %s", address)
 	}
-	return balance, nil
+	return (*big.Int)(result), nil
 }
 
 // GetTransactionCount returns the nonce of address, the number of transactions
