@@ -87,7 +87,8 @@ type Finder struct {
 	// it out.
 	Service *txservice.Client
 	// Warn is called with the errors of sources that failed for a reason other than
-	// not having the transaction, such as an unreachable service. It may be nil.
+	// not having the transaction, such as a service that refuses the request. A
+	// request that gets no answer fails the search instead. It may be nil.
 	Warn func(error)
 }
 
@@ -126,7 +127,10 @@ func (f *Finder) Find(ctx context.Context, safe ethrpc.Address, from, to ethrpc.
 	d := &decoder{Finder: f, safe: safe, to: to, executions: executions, events: events}
 	for i := range executions {
 		e := &executions[i]
-		e.Source, e.Transaction = d.decode(ctx, i)
+		var err error
+		if e.Source, e.Transaction, err = d.decode(ctx, i); err != nil {
+			return nil, err
+		}
 	}
 	return executions, nil
 }

@@ -2,13 +2,21 @@ package ethrpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // testChainID is the chain that test nodes started by serve report.
@@ -327,8 +335,8 @@ func TestGetTransactionByHashNotFound(t *testing.T) {
 		`{"jsonrpc": "2.0", "method": "eth_getTransactionByHash", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
 		`{"result": null}`,
 	)
-	if _, err := client.GetTransactionByHash(t.Context(), Hash{31: 0xcc}); err == nil {
-		t.Fatal("GetTransactionByHash: expected an error")
+	if _, err := client.GetTransactionByHash(t.Context(), Hash{31: 0xcc}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetTransactionByHash: got %v, want ErrNotFound", err)
 	}
 }
 
@@ -497,5 +505,181 @@ func TestNewClientConnectionError(t *testing.T) {
 	t.Cleanup(server.Close)
 	if _, err := NewClient(t.Context(), testChainID, server.URL); err == nil {
 		t.Fatal("NewClient: expected an error")
+	}
+}
+
+func TestTransient(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"not found", errors.New("eth_getTransactionReceipt: transaction 0x01 not found"), false},
+		{"JSON-RPC error", fmt.Errorf("eth_call: %w", &Error{Code: -32000, Message: "execution reverted"}), false},
+		{"timeout", fmt.Errorf("eth_call: %w", &Error{Code: -32016, Message: "eth_call request was canceled due to enabled timeout."}), true},
+		{"missing file", fmt.Errorf("reading request file: %w", &fs.PathError{Op: "open", Path: "request.json", Err: syscall.ENOENT}), false},
+		{"rate limit in an HTTP 429 body", fmt.Errorf("eth_getTransactionReceipt: %w", &HTTPError{Status: "429 Too Many Requests", StatusCode: 429, Err: &Error{Code: -32005, Message: "over rate limit"}}), true},
+		{"rate limit with HTTP 200", fmt.Errorf("eth_call: %w", &Error{Code: -32005, Message: "Rate limit exceeded"}), true},
+		{"server error", fmt.Errorf("eth_call: %w", &HTTPError{Status: "500 Internal Server Error", StatusCode: 500, Body: "error"}), true},
+		{"refused method", fmt.Errorf("eth_call: %w", &HTTPError{Status: "403 Forbidden", StatusCode: 403, Err: &Error{Code: -32601, Message: "rpc method is not whitelisted"}}), false},
+		{"proxy page", fmt.Errorf("eth_call: %w", &HTTPError{Status: "406 Not Acceptable", StatusCode: 406, Body: "<html>"}), true},
+		{"connection failure", fmt.Errorf("eth_call: %w", &url.Error{Op: "Post", URL: "https://node", Err: errors.New("connection refused")}), true},
+		{"connection reset mid-response", fmt.Errorf("eth_call: decoding response: %w", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}), true},
+		{"dropped mid-response", fmt.Errorf("eth_call: decoding response: %w", io.ErrUnexpectedEOF), true},
+		{"timed out mid-response", fmt.Errorf("eth_call: decoding response: %w", context.DeadlineExceeded), true},
+		{"canceled", fmt.Errorf("eth_call: %w", &url.Error{Op: "Post", URL: "https://node", Err: context.Canceled}), false},
+	} {
+		if got := Transient(test.err); got != test.want {
+			t.Errorf("%s: Transient(%v) = %v, want %v", test.name, test.err, got, test.want)
+		}
+	}
+}
+
+func TestRequestNotAnswered(t *testing.T) {
+	// Responses that aren't the node's answer, such as a proxy's page.
+	for _, test := range []struct {
+		name     string
+		response func(w http.ResponseWriter, id uint64)
+	}{
+		{"403 page", func(w http.ResponseWriter, id uint64) { http.Error(w, "Forbidden", http.StatusForbidden) }},
+		{"empty", func(w http.ResponseWriter, id uint64) {}},
+		{"HTML", func(w http.ResponseWriter, id uint64) { io.WriteString(w, "<html>") }},
+		{"other ID", func(w http.ResponseWriter, id uint64) {
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id + 1, "result": "0x"})
+		}},
+		{"no result", func(w http.ResponseWriter, id uint64) {
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id})
+		}},
+	} {
+		url, _ := node(t, "0x1", test.response)
+		if _, err := connect(t, url).Call(t.Context(), CallRequest{}, 1); !Transient(err) {
+			t.Errorf("%s: Call got %v, want a transient error", test.name, err)
+		}
+	}
+}
+
+func TestRequestHTTPErrorType(t *testing.T) {
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
+	})
+	_, err := connect(t, url).Call(t.Context(), CallRequest{}, 1)
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok || httpErr.StatusCode != 500 || httpErr.Body != "unavailable" || !Transient(err) {
+		t.Errorf("Call: got %v, want a transient *HTTPError with status 500", err)
+	}
+}
+
+// fastRateLimitRetries makes the retries of rate-limited requests quick for a
+// test.
+func fastRateLimitRetries(t *testing.T) {
+	t.Helper()
+	delay, maxDelay := rateLimitDelay, rateLimitMaxDelay
+	rateLimitDelay, rateLimitMaxDelay = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { rateLimitDelay, rateLimitMaxDelay = delay, maxDelay })
+}
+
+func TestRawRequestRetriesRateLimit(t *testing.T) {
+	fastRateLimitRetries(t)
+	var calls atomic.Int64
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		res := map[string]any{"jsonrpc": "2.0", "id": id}
+		if calls.Add(1) <= 2 {
+			// A rate limit with HTTP status 200, which httpretry doesn't retry.
+			res["error"] = map[string]any{"code": -32005, "message": "Rate limit exceeded"}
+		} else {
+			res["result"] = "0x2a"
+		}
+		json.NewEncoder(w).Encode(res)
+	})
+	got, err := connect(t, url).BlockNumber(t.Context())
+	if err != nil || got != 42 || calls.Load() != 3 {
+		t.Errorf("BlockNumber: got %d, %v after %d requests, want 42 after 3", got, err, calls.Load())
+	}
+}
+
+func TestRawRequestRateLimitGivesUp(t *testing.T) {
+	fastRateLimitRetries(t)
+	// RawRequest retries a rate limit with HTTP status 200, and httpretry one with
+	// status 429, but not both, so a request is sent at most 5 times.
+	for _, status := range []int{http.StatusOK, http.StatusTooManyRequests} {
+		var calls atomic.Int64
+		url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+			calls.Add(1)
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32005, "message": "Rate limit exceeded"}})
+		})
+		_, err := connect(t, url).BlockNumber(t.Context())
+		if !Transient(err) || calls.Load() != 5 {
+			t.Errorf("HTTP %d: BlockNumber got %v after %d requests, want a transient error after 5", status, err, calls.Load())
+		}
+	}
+}
+
+func TestRawRequestCanceledWhileWaiting(t *testing.T) {
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32005, "message": "Rate limit exceeded"}})
+	})
+	client := connect(t, url)
+	// The first retry waits at least half of rateLimitDelay, 500 ms.
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := client.BlockNumber(ctx); !errors.Is(err, context.Canceled) || Transient(err) {
+		t.Errorf("BlockNumber: got %v, want the cancellation", err)
+	}
+}
+
+func TestRawRequestDoesNotRetryOtherErrors(t *testing.T) {
+	var calls atomic.Int64
+	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+		calls.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32000, "message": "execution reverted"}})
+	})
+	if _, err := connect(t, url).Call(t.Context(), CallRequest{}, 1); err == nil || calls.Load() != 1 {
+		t.Errorf("Call: got %v after %d requests, want an error after 1", err, calls.Load())
+	}
+}
+
+func TestRevertedAndHalted(t *testing.T) {
+	// The answers of reth (Blast, dRPC), geth (PublicNode), and anvil to calls of
+	// contracts that revert or halt, and to calls that they don't run.
+	call := func(code int, message string) error {
+		return fmt.Errorf("eth_call: %w", &Error{Code: code, Message: message})
+	}
+	for _, test := range []struct {
+		name             string
+		err              error
+		reverted, halted bool
+	}{
+		{"revert", call(3, "execution reverted"), true, false},
+		{"revert by its code", call(3, "VM execution error"), true, false},
+		{"revert with a reason", call(-32000, "execution reverted: not allowed"), true, false},
+		{"reth invalid opcode", call(-32003, "EVM error: InvalidFEOpcode"), false, true},
+		{"reth out of gas", call(-32003, "out of gas: gas required exceeds: 50000000"), false, true},
+		{"reth stack underflow", call(-32003, "EVM error: StackUnderflow"), false, true},
+		{"geth invalid opcode", call(-32000, "invalid opcode: INVALID"), false, true},
+		{"geth out of gas", call(-32000, "out of gas"), false, true},
+		{"geth stack underflow", call(-32000, "stack underflow (0 <=> 2)"), false, true},
+		{"geth stack overflow", call(-32000, "stack limit reached 1024 (1023)"), false, true},
+		{"geth invalid jump", call(-32000, "invalid jump destination"), false, true},
+		{"geth return data", call(-32000, "return data out of bounds"), false, true},
+		{"anvil invalid opcode", call(-32603, "EVM error InvalidFEOpcode"), false, true},
+		{"missing block", call(-32000, "header not found"), false, false},
+		{"unsupported block", call(-32000, "unsupported block number"), false, false},
+		{"node timeout", call(-32000, "execution aborted (timeout = 5s)"), false, false},
+		{"error that names a revert", call(-32000, "missing state, so it can't tell whether the call reverted"), false, false},
+		{"rate limit", call(-32005, "out of gas credits, execution reverted"), false, false},
+		{"server error with a revert", fmt.Errorf("eth_call: %w", &HTTPError{Status: "500 Internal Server Error", StatusCode: 500, Err: &Error{Code: 3, Message: "execution reverted"}}), false, false},
+		{"server error with a halt", fmt.Errorf("eth_call: %w", &HTTPError{Status: "503 Service Unavailable", StatusCode: 503, Err: &Error{Code: -32003, Message: "EVM error: InvalidFEOpcode"}}), false, false},
+		{"not an RPC error", errors.New("execution reverted"), false, false},
+		{"nil", nil, false, false},
+	} {
+		if got := Reverted(test.err); got != test.reverted {
+			t.Errorf("%s: Reverted(%v) = %v, want %v", test.name, test.err, got, test.reverted)
+		}
+		if got := Halted(test.err); got != test.halted {
+			t.Errorf("%s: Halted(%v) = %v, want %v", test.name, test.err, got, test.halted)
+		}
 	}
 }

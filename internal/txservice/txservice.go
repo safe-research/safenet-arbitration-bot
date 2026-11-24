@@ -37,6 +37,28 @@ const maxResponseSize = 8 << 20
 // ErrNotFound is the error for a transaction that the service doesn't have.
 var ErrNotFound = errors.New("transaction not found")
 
+// StatusError is a response with an HTTP error status other than 404 Not Found.
+type StatusError struct {
+	Status     string
+	StatusCode int
+	// Body is the start of the response body.
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("HTTP %s: %q", e.Status, e.Body)
+}
+
+// Unavailable reports whether err is a failure to get an answer from the
+// service, such as a rate limit, a server error, or a dropped connection, as
+// ethrpc.Transient is for a node, rather than its answer.
+func Unavailable(err error) bool {
+	if statusErr, ok := errors.AsType[*StatusError](err); ok {
+		return statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode >= 500
+	}
+	return ethrpc.Transient(err)
+}
+
 // Client fetches Safe transactions from a Safe Transaction Service.
 type Client struct {
 	http    *http.Client
@@ -80,7 +102,7 @@ func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*safe
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, ErrNotFound
 	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("HTTP %s: %q", resp.Status, snippet(body))
+		return nil, &StatusError{Status: resp.Status, StatusCode: resp.StatusCode, Body: snippet(body)}
 	case len(body) > maxResponseSize:
 		return nil, fmt.Errorf("response exceeds %d bytes", maxResponseSize)
 	}

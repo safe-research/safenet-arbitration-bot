@@ -13,6 +13,8 @@ import (
 	"slices"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/config"
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
 )
 
 // env is what a command runs with.
@@ -70,6 +72,11 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		code = 2
 	}
 	fmt.Fprintf(stderr, "%s: %v\n", e.progname, err)
+	if ethrpc.Transient(err) || txservice.Unavailable(err) {
+		// A node or service didn't answer, which says nothing about the chain: the
+		// command failed rather than report something it couldn't read.
+		fmt.Fprintf(stderr, "%s: a request failed rather than being answered; run the command again later, or with another URL for that node or service in the config\n", e.progname)
+	}
 	return code
 }
 

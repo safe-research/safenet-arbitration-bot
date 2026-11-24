@@ -119,6 +119,35 @@ func TestTransactionErrors(t *testing.T) {
 	}
 }
 
+func TestUnavailable(t *testing.T) {
+	// A rate limit, a server error, or a failure to connect isn't the service's
+	// answer, unlike a refusal, a response that doesn't decode, or not having the
+	// transaction.
+	_, serverError := serve(t, http.StatusInternalServerError, "unavailable").Transaction(t.Context(), hash)
+	_, refusal := serve(t, http.StatusForbidden, "forbidden").Transaction(t.Context(), hash)
+	_, notJSON := serve(t, http.StatusOK, "<html>").Transaction(t.Context(), hash)
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	_, refused := NewClient(closed.URL, ethrpc.Mainnet).Transaction(t.Context(), hash)
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"rate limit", &StatusError{Status: "429 Too Many Requests", StatusCode: http.StatusTooManyRequests}, true},
+		{"server error", serverError, true},
+		{"connection refused", refused, true},
+		{"refusal", refusal, false},
+		{"not JSON", notJSON, false},
+		{"not found", ErrNotFound, false},
+		{"nil", nil, false},
+	} {
+		if got := Unavailable(test.err); got != test.want {
+			t.Errorf("%s: Unavailable(%v) = %v, want %v", test.name, test.err, got, test.want)
+		}
+	}
+}
+
 func TestDefaultURLs(t *testing.T) {
 	for _, chainID := range []uint64{ethrpc.Mainnet, ethrpc.ArbitrumOne, ethrpc.Gnosis} {
 		if !strings.HasPrefix(DefaultURLs[chainID], "https://") {

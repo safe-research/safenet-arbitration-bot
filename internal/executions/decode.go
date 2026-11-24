@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -29,11 +30,25 @@ type decoder struct {
 	nonceNext *big.Int
 	txs       map[ethrpc.Hash]*ethrpc.Transaction
 	traces    map[ethrpc.Hash][]ethrpc.Bytes
+	// err is the first request to the node or the service that failed without an
+	// answer. Such a failure says nothing about the execution, so decoding stops
+	// rather than report it as unknown.
+	err error
 }
 
 // decode returns the Safe transaction of executions[i] and where it is from, or
-// nothing if no source has it.
-func (d *decoder) decode(ctx context.Context, i int) (Source, *safenet.SafeTransaction) {
+// nothing if no source has it. It returns an error if a request to the node or
+// the service failed without an answer, since the transaction could then be in
+// a source that it couldn't read.
+func (d *decoder) decode(ctx context.Context, i int) (Source, *safenet.SafeTransaction, error) {
+	source, tx := d.decodeSources(ctx, i)
+	if d.err != nil {
+		return "", nil, fmt.Errorf("decoding the Safe transaction %s: %w", d.executions[i].SafeTxHash, d.err)
+	}
+	return source, tx, nil
+}
+
+func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.SafeTransaction) {
 	e := d.executions[i]
 	for _, tx := range d.events[e.TxHash] {
 		if matches(tx, e.SafeTxHash) {
@@ -48,13 +63,24 @@ func (d *decoder) decode(ctx context.Context, i int) (Source, *safenet.SafeTrans
 		if tx := d.fromCalldata(ctx, e, nonce); tx != nil {
 			return SourceCalldata, tx
 		}
+		if d.err != nil {
+			return "", nil
+		}
 		if tx := d.fromTrace(ctx, e, nonce); tx != nil {
 			return SourceTrace, tx
 		}
 	}
+	if d.err != nil {
+		return "", nil
+	}
 
 	if d.Service != nil {
 		tx, err := d.Service.Transaction(ctx, e.SafeTxHash)
+		// A service that fails says nothing about the transaction, as a node doesn't.
+		if txservice.Unavailable(err) {
+			d.fail(fmt.Errorf("getting Safe transaction %s from the Safe Transaction Service: %w", e.SafeTxHash, err))
+			return "", nil
+		}
 		if err != nil && !errors.Is(err, txservice.ErrNotFound) {
 			d.warn(fmt.Errorf("getting Safe transaction %s from the Safe Transaction Service: %w", e.SafeTxHash, err))
 		}
@@ -70,12 +96,21 @@ func (d *decoder) nonce(ctx context.Context, i int) *big.Int {
 	if !d.nonceRead {
 		d.nonceRead = true
 		result, err := d.Eth.Call(ctx, ethrpc.CallRequest{To: d.safe, Data: solabi.Call(nonceSelector)}, d.to)
+		// The account logged executions, so the only answer that isn't a nonce is its
+		// code's, such as after a delegate call replaced its singleton. Any other error
+		// is about the node, such as a block whose state it doesn't have.
+		if err != nil && !ethrpc.Reverted(err) && !ethrpc.Halted(err) {
+			d.fail(fmt.Errorf("reading the nonce of %s at block %d: %w", d.safe, d.to, err))
+			return nil
+		}
+		if err == nil {
+			dec := solabi.NewDecoder(result)
+			if d.nonceNext = dec.Uint(0); dec.Err() != nil {
+				d.nonceNext, err = nil, dec.Err()
+			}
+		}
 		if err != nil {
 			d.warn(fmt.Errorf("reading the nonce of %s at block %d: %w", d.safe, d.to, err))
-		} else if dec := solabi.NewDecoder(result); dec.Err() == nil {
-			if next := dec.Uint(0); dec.Err() == nil {
-				d.nonceNext = next
-			}
 		}
 	}
 	if d.nonceNext == nil {
@@ -96,6 +131,12 @@ func (d *decoder) fromCalldata(ctx context.Context, e Execution, nonce *big.Int)
 	if !ok {
 		var err error
 		result, err := d.Eth.GetTransactionByHash(ctx, e.TxHash)
+		// The node logged the transaction, so the only error that is an answer is not
+		// having it, from a node that only indexes recent transactions.
+		if err != nil && !errors.Is(err, ethrpc.ErrNotFound) {
+			d.fail(fmt.Errorf("getting transaction %s: %w", e.TxHash, err))
+			return nil
+		}
 		if err != nil {
 			d.warn(fmt.Errorf("getting transaction %s: %w", e.TxHash, err))
 		} else {
@@ -118,8 +159,20 @@ func (d *decoder) fromTrace(ctx context.Context, e Execution, nonce *big.Int) *s
 	inputs, ok := d.traces[e.TxHash]
 	if !ok {
 		var root callFrame
-		// Most public nodes don't serve traces, so failing to get one is not a warning.
+		// Most public nodes don't serve traces, so a JSON-RPC error, such as for a
+		// method that the node doesn't serve, or a trace that timed out, is not a
+		// warning, and the next source may have the transaction. Some nodes refuse the
+		// method with an HTTP error status rather than a JSON-RPC error, such as a 401
+		// or 406 page or a 503, which is only a warning for that reason. A rate limit
+		// or a dropped connection is a failure, though, since the node may serve
+		// traces.
 		err := d.Eth.RawRequest(ctx, &root, "debug_traceTransaction", e.TxHash, map[string]any{"tracer": "callTracer"})
+		if httpErr, ok := errors.AsType[*ethrpc.HTTPError](err); ok && httpErr.StatusCode != http.StatusTooManyRequests && ethrpc.Transient(err) {
+			d.warn(fmt.Errorf("tracing transaction %s: %w", e.TxHash, err))
+		} else if ethrpc.Transient(err) && !ethrpc.TimedOut(err) {
+			d.fail(fmt.Errorf("tracing transaction %s: %w", e.TxHash, err))
+			return nil
+		}
 		if err == nil {
 			inputs = root.callsTo(d.safe, nil)
 		}
@@ -148,6 +201,12 @@ func (d *decoder) candidate(input []byte, e Execution, nonce *big.Int) *safenet.
 		return nil
 	}
 	return tx
+}
+
+func (d *decoder) fail(err error) {
+	if d.err == nil {
+		d.err = err
+	}
 }
 
 func (d *decoder) warn(err error) {
