@@ -1,7 +1,8 @@
 // Package functions decodes the call data of well-known functions: those of
 // ERC-20 tokens, the execTransaction and setup of Safe 1.3.0, 1.4.1, and 1.5.0,
-// the functions of their proxy factories that create a proxy, and the
-// performCreate and performCreate2 of their CreateCall contracts.
+// the multiSend of their MultiSend contracts, the functions of their proxy
+// factories that create a proxy, and the performCreate and performCreate2 of
+// their CreateCall contracts.
 //
 // Call data is decoded by its selector and ABI layout only, so data that
 // decodes as one of them says nothing about the contract that it calls, whose
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/multisend"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 )
 
@@ -37,16 +39,28 @@ type Arg struct {
 	// that the function makes, such as the data of execTransaction, if it is that
 	// of one of the well-known functions. It is left out otherwise.
 	Call *Function `json:"call,omitempty"`
+	// Batch is the transactions that a bytes argument packs for MultiSend, such as
+	// the argument of multiSend. It is left out of other arguments.
+	Batch []Transaction `json:"batch,omitzero"`
+}
+
+// Transaction is a transaction of a MultiSend batch, with its data decoded as a
+// well-known function, if it is one.
+type Transaction struct {
+	multisend.Transaction
+	Function *Function `json:"function"`
 }
 
 // param is a parameter of a function. A bytes parameter that is call is the
 // data of a call that the function makes, unless the earlier address parameter
-// named unless is the zero address.
+// named unless is the zero address, and one that is batch packs the
+// transactions of a MultiSend batch.
 type param struct {
 	name   string
 	typ    string
 	call   bool
 	unless string
+	batch  bool
 }
 
 // definition is a well-known function: its name and parameters, in order.
@@ -73,9 +87,11 @@ func define(name string, params ...param) {
 	definitions[selector] = definition{name, signature, params}
 }
 
-// p is a parameter, and data a bytes parameter that is call data.
+// p is a parameter, data a bytes parameter that is call data, and batch one
+// that packs MultiSend transactions.
 func p(typ, name string) param { return param{name: name, typ: typ} }
 func data(name string) param   { return param{name: name, typ: "bytes", call: true} }
+func batch(name string) param  { return param{name: name, typ: "bytes", batch: true} }
 
 func init() {
 	// ERC-20.
@@ -93,6 +109,10 @@ func init() {
 	define("setup", p("address[]", "owners"), p("uint256", "threshold"), p("address", "to"),
 		param{name: "data", typ: "bytes", call: true, unless: "to"},
 		p("address", "fallbackHandler"), p("address", "paymentToken"), p("uint256", "payment"), p("address", "paymentReceiver"))
+
+	// MultiSend and MultiSendCallOnly. They run the transactions that transactions
+	// packs, as multisend.Decode reads them.
+	define("multiSend", batch("transactions"))
 
 	// Safe proxy factories. They deploy a proxy of singleton, and call it with the
 	// initializer, such as setup, or with data for 1.3.0's createProxy. The L2 and
@@ -117,8 +137,8 @@ const maxDepth = 8
 // Decode decodes call data as one of the well-known functions, and the data of
 // the calls that it makes as well-known functions, if they are. It returns nil
 // if the data isn't one, or has a well-known selector but arguments that don't
-// fit its ABI layout. Data after the arguments is ignored, as the Solidity ABI
-// decoder ignores it.
+// fit its ABI layout, or a MultiSend batch that reverts whatever the state.
+// Data after the arguments is ignored, as the Solidity ABI decoder ignores it.
 func Decode(calldata []byte) *Function {
 	return decode(calldata, 0)
 }
@@ -165,6 +185,16 @@ func decode(calldata []byte, depth int) *Function {
 			if p.call && d.Err() == nil && !zeroAddress(args[:i], p.unless) {
 				arg.Call = decode(b, depth+1)
 			}
+			if p.batch && d.Err() == nil {
+				transactions, ok := multisend.Decode(b)
+				if !ok {
+					return nil
+				}
+				arg.Batch = []Transaction{}
+				for _, tx := range transactions {
+					arg.Batch = append(arg.Batch, Transaction{tx, decode(tx.Data, depth+1)})
+				}
+			}
 		}
 		if d.Err() != nil {
 			return nil
@@ -185,13 +215,47 @@ func zeroAddress(args []Arg, name string) bool {
 	return false
 }
 
+// maxNames is how many names String writes, so that the description of a large
+// batch stays short. The JSON output has all of them.
+const maxNames = 16
+
 // String returns the name of the function, followed by those of the well-known
-// functions of the calls that it makes, such as "execTransaction > transfer".
+// functions of the calls that it makes, such as "execTransaction > transfer",
+// with those of a batch in brackets and "-" for unknown data, such as
+// "multiSend > [transfer, -]". It writes "..." in place of the names after the
+// first maxNames.
 func (f *Function) String() string {
+	n := maxNames
+	return f.string(&n)
+}
+
+// string returns the description that String does, with at most n names, and
+// counts down n by the names that it writes.
+func (f *Function) string(n *int) string {
+	if *n <= 0 {
+		return "..."
+	}
+	*n--
 	names := []string{f.Name}
 	for _, a := range f.Args {
 		if a.Call != nil {
-			names = append(names, a.Call.String())
+			names = append(names, a.Call.string(n))
+		}
+		if a.Batch != nil {
+			var batch []string
+			for _, tx := range a.Batch {
+				if *n <= 0 {
+					batch = append(batch, "...")
+					break
+				}
+				if tx.Function == nil {
+					*n--
+					batch = append(batch, "-")
+					continue
+				}
+				batch = append(batch, tx.Function.string(n))
+			}
+			names = append(names, "["+strings.Join(batch, ", ")+"]")
 		}
 	}
 	return strings.Join(names, " > ")

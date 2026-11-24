@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/multisend"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 )
@@ -38,12 +39,6 @@ var multiSends = map[ethrpc.Address]multiSend{
 func MultiSendCallOnly(address ethrpc.Address) bool {
 	return multiSends[address].callOnly
 }
-
-// maxDataLength is a data length that a MultiSend transaction can't exceed
-// without reverting: its call would expand memory past 2^24 bytes, which costs
-// more than 2^29 gas, more than a transaction can use on the networks that the
-// Charter covers.
-const maxDataLength = 1 << 24
 
 // multiSendSelector is the selector of multiSend(bytes), the only function of
 // MultiSend and MultiSendCallOnly.
@@ -101,24 +96,15 @@ var invalidMultiSendCheck = check{
 // target, so that there is always at least one call.
 //
 // Calls that it can't decode are left as they are. It decodes the calls that a
-// MultiSend makes as the contract does, following the version of the contract:
+// MultiSend makes as the contract does, with multisend.Decode, following the
+// version of the contract:
 //
 //   - The contract has no fallback, so any call to it other than one to
 //     multiSend reverts.
 //   - MultiSend reverts unless it is delegate called. MultiSendCallOnly makes
 //     its calls itself when it is called, rather than the Safe, so they are
 //     left as a single call to it.
-//   - Its transactions are packed: an operation byte, a 20-byte address, a
-//     32-byte value, a 32-byte data length, and the data. It runs them while
-//     there are more than 32 bytes left, so it ignores up to 32 trailing
-//     bytes.
-//   - It doesn't check that a transaction fits in the bytes that are left, and
-//     reads past their end, where memory is zero. A transaction is therefore
-//     decoded as if its bytes were followed by zeros.
-//   - A transaction with more than maxDataLength bytes of data needs more
-//     memory than a transaction can pay for, so it reverts.
-//   - An operation other than a call, or than a delegate call for MultiSend,
-//     reverts.
+//   - MultiSendCallOnly reverts on a transaction that is a delegate call.
 //   - Since 1.5.0, the zero address means the Safe itself.
 //   - It reverts if any of its calls fails, so a call that reverts makes it
 //     revert too.
@@ -151,40 +137,24 @@ func expandMultiSendCall(safe ethrpc.Address, c call) ([]call, bool) {
 	}
 
 	d := solabi.NewDecoder(c.data[4:])
-	transactions := d.Bytes(0)
+	batch := d.Bytes(0)
 	if d.Err() != nil {
 		return []call{c}, false
 	}
+	transactions, ok := multisend.Decode(batch)
+	if !ok {
+		return nil, true
+	}
 	var calls []call
-	for offset := 0; len(transactions)-offset > 32; {
-		head := [1 + 20 + 32 + 32]byte{}
-		copy(head[:], transactions[offset:])
-		dataLength := new(big.Int).SetBytes(head[53:85])
-		if !dataLength.IsUint64() || dataLength.Uint64() > maxDataLength {
+	for _, tx := range transactions {
+		if ms.callOnly && tx.Operation != safenet.OperationCall {
 			return nil, true
 		}
-		data := make(ethrpc.Bytes, dataLength.Uint64())
-		start := offset + len(head)
-		if start < len(transactions) {
-			copy(data, transactions[start:])
-		}
-		offset = start + len(data)
-
-		operation := safenet.Operation(head[0])
-		if operation > safenet.OperationDelegateCall || ms.callOnly && operation != safenet.OperationCall {
-			return nil, true
-		}
-		to := ethrpc.Address(head[1:21])
+		to := tx.To
 		if to == (ethrpc.Address{}) && ms.version == "1.5.0" {
 			to = safe
 		}
-		sub := call{
-			to:        to,
-			value:     new(big.Int).SetBytes(head[21:53]),
-			data:      data,
-			operation: operation,
-			kind:      Batched,
-		}
+		sub := call{to: to, value: tx.Value, data: tx.Data, operation: tx.Operation, kind: Batched}
 		subCalls, reverts := expandMultiSendCall(safe, sub)
 		if reverts {
 			return nil, true
