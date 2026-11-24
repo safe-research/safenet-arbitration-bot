@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math/big"
 	"text/tabwriter"
@@ -135,25 +134,9 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 	if err := parse(flags, args, 0); err != nil {
 		return err
 	}
-	blocksSet := false
-	flags.Visit(func(f *flag.Flag) { blocksSet = blocksSet || f.Name == "blocks" })
-	if *all && blocksSet {
-		return usageError("-blocks doesn't apply with -all, which reads the blocks that the Safe Transaction Service names")
-	}
-	var ref *safeRef
-	var fromBlock *uint64
-	if *all {
-		safe, err := openSafe(ctx, e, *requestFile)
-		if err != nil {
-			return err
-		}
-		ref = safe
-	} else {
-		scan, err := openScan(ctx, e, *requestFile, *blocks)
-		if err != nil {
-			return err
-		}
-		ref, fromBlock = scan.safeRef, &scan.FromBlock
+	ref, fromBlock, err := openRange(ctx, e, flags, *requestFile, *blocks, *all)
+	if err != nil {
+		return err
 	}
 
 	finder := &executions.Finder{
