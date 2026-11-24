@@ -36,7 +36,26 @@ func listed(tx *safenet.SafeTransaction, hash ethrpc.Hash, block uint64) listing
 // creation created the Safe, if given. It has no transactions by hash.
 func historyService(t *testing.T, listings []listing, creation ...ethrpc.Hash) *txservice.Client {
 	t.Helper()
+	return historyServiceWith(t, listings, nil, creation...)
+}
+
+// historyServiceWith is historyService with the transactions by hash of
+// transactions.
+func historyServiceWith(t *testing.T, listings []listing, transactions map[ethrpc.Hash]*safenet.SafeTransaction, creation ...ethrpc.Hash) *txservice.Client {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/"); ok {
+			h, err := ethrpc.ParseHash(strings.TrimSuffix(id, "/"))
+			if tx := transactions[h]; tx != nil && err == nil {
+				json.NewEncoder(w).Encode(map[string]any{
+					"safe": tx.Safe, "to": tx.To, "value": tx.Value.String(), "data": tx.Data,
+					"operation": uint8(tx.Operation), "safeTxGas": tx.SafeTxGas.Uint64(), "baseGas": tx.BaseGas.Uint64(),
+					"gasPrice": tx.GasPrice.String(), "gasToken": tx.GasToken, "refundReceiver": tx.RefundReceiver,
+					"nonce": tx.Nonce.Uint64(),
+				})
+				return
+			}
+		}
 		if r.URL.Path == "/api/v1/safes/"+safe.String()+"/creation/" && len(creation) > 0 {
 			json.NewEncoder(w).Encode(map[string]any{"transactionHash": creation[0], "creator": relayer})
 			return
@@ -560,6 +579,53 @@ func TestFindAllNodeFailure(t *testing.T) {
 		f = &Finder{Eth: c.serve(t), Service: historyService(t, []listing{}, hash(7))}
 		if _, err := f.FindAll(t.Context(), safe, 200); !ethrpc.Transient(err) || !strings.Contains(err.Error(), "creation") {
 			t.Errorf("FindAll with %s failing: got error %v, want a transient error about the creation", method, err)
+		}
+	}
+}
+
+func TestFindAllNonceUnanswered(t *testing.T) {
+	// Four executions, at the nonces 0 to 3, of which the service lists the first
+	// and the last. The others are in block 110, whose state the node doesn't keep,
+	// or whose nonce it fails to read in time, which leaves out their calldata with
+	// one warning, so they come from the service, which has them by hash.
+	var txs []*safenet.SafeTransaction
+	for n := range 4 {
+		txs = append(txs, transaction("calldata", int64(n)))
+	}
+	for _, rpcErr := range []ethrpc.Error{missingState, nodeTimeout} {
+		c := &chain{nonce: big.NewInt(4), txs: make(map[ethrpc.Hash]ethrpc.Transaction), erringCalls: map[uint64]ethrpc.Error{110: rpcErr}}
+		var want []Execution
+		// The blocks and log indexes of the executions.
+		for n, at := range [][2]uint64{{100, 0}, {110, 0}, {110, 1}, {120, 0}} {
+			c.txs[hash(byte(n+1))] = ethrpc.Transaction{To: &safe, Input: execCall(txs[n])}
+			c.logs = append(c.logs, executionLog(executionSuccessEvent, txs[n].Hash(), hash(byte(n+1)), true, at[0], at[1]))
+			x := executed(txs[n], hash(byte(n+1)), at[0], SourceService)
+			x.LogIndex = at[1]
+			want = append(want, x)
+		}
+		listings := []listing{listed(txs[0], hash(1), 100), listed(txs[3], hash(4), 120)}
+		byHash := map[ethrpc.Hash]*safenet.SafeTransaction{txs[1].Hash(): txs[1], txs[2].Hash(): txs[2]}
+		f := &Finder{Eth: c.serve(t), Service: historyServiceWith(t, listings, byHash)}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.FindAll(t.Context(), safe, 200)
+		if err != nil {
+			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
+		}
+		checkExecutions(t, got.Executions, want)
+		if !got.Complete() {
+			t.Errorf("%v: FindAll: got %+v, want a complete history", &rpcErr, got)
+		}
+		if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "reading the nonce of "+safe.String()+" at block 110") {
+			t.Errorf("%v: warnings %v, want one about reading the nonce at block 110", &rpcErr, warnings)
+		}
+
+		// Without one of them in the service, FindAll fails, since the calldata might
+		// have it.
+		delete(byHash, txs[2].Hash())
+		f = &Finder{Eth: f.Eth, Service: historyServiceWith(t, listings, byHash), Warn: func(error) {}}
+		if got, err := f.FindAll(t.Context(), safe, 200); err == nil || !strings.Contains(err.Error(), rpcErr.Message) || ethrpc.Transient(err) != ethrpc.Transient(&rpcErr) {
+			t.Errorf("%v without the third transaction in the service: FindAll got %+v, %v, want the node's error", &rpcErr, got, err)
 		}
 	}
 }

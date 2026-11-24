@@ -41,8 +41,10 @@ type chain struct {
 	// traced counts the trace requests.
 	traced atomic.Int64
 	// erring are the methods that the node answers with a JSON-RPC error, such as
-	// nodeTimeout.
-	erring map[string]ethrpc.Error
+	// nodeTimeout, and erringCalls the blocks at which it answers eth_call with
+	// one, such as for a block whose state it doesn't keep.
+	erring      map[string]ethrpc.Error
+	erringCalls map[uint64]ethrpc.Error
 	// empty makes the Safe's calls return no data, as those to an account without
 	// code do.
 	empty bool
@@ -66,8 +68,12 @@ type chain struct {
 	ranges [][2]uint64
 }
 
-// nodeTimeout is Nethermind's error for a request that ran past its time limit.
-var nodeTimeout = ethrpc.Error{Code: -32016, Message: "request was canceled due to enabled timeout."}
+// nodeTimeout is Nethermind's error for a request that ran past its time limit,
+// and missingState geth's for a block whose state it doesn't keep.
+var (
+	nodeTimeout  = ethrpc.Error{Code: -32016, Message: "request was canceled due to enabled timeout."}
+	missingState = ethrpc.Error{Code: -32000, Message: "missing trie node 7b2ad5 (path ) state 0x7b2ad5 is not available"}
+)
 
 // serve starts the node, and returns a client for it.
 func (c *chain) serve(t *testing.T) *ethrpc.Client {
@@ -135,6 +141,10 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			var block ethrpc.BlockNumber
 			json.Unmarshal(req.Params[0], &call)
 			json.Unmarshal(req.Params[1], &block)
+			if rpcErr, ok := c.erringCalls[uint64(block)]; ok {
+				res["error"] = rpcErr
+				break
+			}
 			if c.empty {
 				res["result"] = "0x"
 				break
@@ -534,6 +544,47 @@ func TestFindNodeError(t *testing.T) {
 			if err == nil || c.traced.Load() != 0 {
 				t.Errorf("%s answering %v: Find got %+v, %v after %d traces, want an error and no trace", method, &rpcErr, got, err, c.traced.Load())
 			}
+		}
+	}
+}
+
+func TestFindNonceUnanswered(t *testing.T) {
+	// A nonce that the node doesn't answer for, such as at a block whose state it
+	// doesn't keep, or after a timeout, leaves out the calldata and traces with one
+	// warning, so the transactions come from the service. Find only fails if the
+	// service doesn't have one, since the calldata might have.
+	first, second := transaction("first", 0), transaction("second", 1)
+	for _, rpcErr := range []ethrpc.Error{missingState, nodeTimeout} {
+		c := &chain{
+			nonce:  big.NewInt(2),
+			erring: map[string]ethrpc.Error{"eth_call": rpcErr},
+			txs: map[ethrpc.Hash]ethrpc.Transaction{
+				hash(1): {Hash: hash(1), To: &safe, Input: execCall(first)}, hash(2): {Hash: hash(2), To: &relayer, Input: execCall(second)},
+			},
+			logs: []ethrpc.Log{
+				executionLog(executionSuccessEvent, first.Hash(), hash(1), true, 100, 0),
+				executionLog(executionSuccessEvent, second.Hash(), hash(2), true, 110, 0),
+			},
+		}
+		eth := c.serve(t)
+		f := &Finder{Eth: eth, Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{first.Hash(): first, second.Hash(): second})}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.Find(t.Context(), safe, 0, 200)
+		if err != nil {
+			t.Fatalf("%v: Find: %v", &rpcErr, err)
+		}
+		checkExecutions(t, got, []Execution{executed(first, hash(1), 100, SourceService), executed(second, hash(2), 110, SourceService)})
+		if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "reading the nonce of "+safe.String()+" at block 200") {
+			t.Errorf("%v: warnings %v, want one about reading the nonce", &rpcErr, warnings)
+		}
+
+		f = &Finder{Eth: eth, Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{first.Hash(): first})}
+		got, err = f.Find(t.Context(), safe, 0, 200)
+		if err == nil || !strings.Contains(err.Error(), "no other source has the transaction") || !strings.Contains(err.Error(), rpcErr.Message) ||
+			ethrpc.Transient(err) != ethrpc.Transient(&rpcErr) || c.traced.Load() != 0 {
+			t.Errorf("%v without the second transaction in the service: Find got %+v, %v after %d traces, want the node's error and no trace",
+				&rpcErr, got, err, c.traced.Load())
 		}
 	}
 }

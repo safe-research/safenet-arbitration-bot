@@ -73,6 +73,11 @@ var (
 // historyChain is a fake node for Ethereum Mainnet with logs.
 type historyChain struct {
 	logs []ethrpc.Log
+	// nonce is the Safe's nonce, if set, which the node has from the block
+	// stateFrom on: it answers eth_call at an earlier block as a node does that
+	// doesn't keep the state of old blocks.
+	nonce     *big.Int
+	stateFrom uint64
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
 	// status 500, as an overloaded node does.
 	failingBlocks []uint64
@@ -122,6 +127,18 @@ func (c *historyChain) serve(t *testing.T) string {
 				}
 			}
 			res["result"] = logs
+		case "eth_call":
+			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[1], &block)
+			switch {
+			case c.nonce == nil:
+				res["error"] = map[string]any{"code": -32601, "message": "method not found"}
+			case uint64(block) < c.stateFrom:
+				res["error"] = map[string]any{"code": -32000, "message": "missing trie node 7b2ad5 (path ) state 0x7b2ad5 is not available"}
+			default:
+				word := solabi.Uint(c.nonce)
+				res["result"] = ethrpc.Bytes(word[:])
+			}
 		default:
 			res["error"] = map[string]any{"code": -32601, "message": "method not found"}
 		}
@@ -132,15 +149,18 @@ func (c *historyChain) serve(t *testing.T) string {
 }
 
 // historyService is a fake Safe Transaction Service for Ethereum Mainnet that
-// knows the Safe, and lists its transfers, or fails with HTTP status 500 if
+// knows the Safe, and lists its executions and transfers, and has the
+// transactions by Safe transaction hash, or fails with HTTP status 500 if
 // failing. Like the service, it lists nothing for a Safe that it doesn't know,
 // which is any Safe if unknown. It filters the transfers by kind, sender, and
 // recipient, but not by block, as a service that misfilters would, and keeps
 // the queries for them.
 type historyService struct {
-	transfers []map[string]any
-	failing   bool
-	unknown   bool
+	executions   []map[string]any
+	transactions map[ethrpc.Hash]map[string]any
+	transfers    []map[string]any
+	failing      bool
+	unknown      bool
 
 	mu      sync.Mutex
 	queries []url.Values
@@ -151,6 +171,15 @@ func (s *historyService) serve(t *testing.T) string {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.failing {
 			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		if id, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/"); ok {
+			hash, err := ethrpc.ParseHash(strings.TrimSuffix(id, "/"))
+			if tx, ok := s.transactions[hash]; ok && err == nil {
+				json.NewEncoder(w).Encode(tx)
+			} else {
+				http.NotFound(w, r)
+			}
 			return
 		}
 		path, _ := strings.CutPrefix(r.URL.Path, "/api/v1/safes/")
@@ -173,7 +202,9 @@ func (s *historyService) serve(t *testing.T) string {
 					results = append(results, x)
 				}
 			}
-		case endpoint != "transfers/":
+		case endpoint == "multisig-transactions/" && known:
+			results = append(results, s.executions...)
+		case endpoint != "transfers/" && endpoint != "multisig-transactions/":
 			http.NotFound(w, r)
 			return
 		}

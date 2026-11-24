@@ -105,7 +105,9 @@ type Rejected struct {
 //
 // Executions by modules don't use nonces, and the service doesn't list them, so
 // they aren't found. Any other request to the node that fails, such as for a
-// rate limit, fails FindAll, since it says nothing about the history.
+// rate limit, fails FindAll, since it says nothing about the history, unless it
+// reads the Safe's nonce at an execution's block and another source has the
+// transaction (see Finder.Eth).
 func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber) (*History, error) {
 	if f.Service == nil {
 		return nil, errors.New("finding every execution needs the Safe Transaction Service")
