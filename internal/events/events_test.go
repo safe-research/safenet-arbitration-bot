@@ -107,6 +107,22 @@ func TestDecode(t *testing.T) {
 			log("ProxyCreation(address)", nil, solabi.Encode(alice)),
 			&Event{"ProxyCreation", "ProxyCreation(address)", args(Arg{"proxy", "address", alice})},
 		},
+		{
+			"Safe 1.5.0 ProxyCreationL2",
+			log("ProxyCreationL2(address,address,bytes,uint256)", []ethrpc.Hash{word(alice)}, solabi.Encode(bob, []byte("init"), uint64(4))),
+			&Event{"ProxyCreationL2", "ProxyCreationL2(address,address,bytes,uint256)", args(
+				Arg{"proxy", "address", alice}, Arg{"singleton", "address", bob},
+				Arg{"initializer", "bytes", ethrpc.Bytes("init")}, Arg{"saltNonce", "uint256", big.NewInt(4)},
+			)},
+		},
+		{
+			"Safe 1.5.0 ChainSpecificProxyCreationL2",
+			log("ChainSpecificProxyCreationL2(address,address,bytes,uint256,uint256)", []ethrpc.Hash{word(alice)}, solabi.Encode(bob, []byte("init"), uint64(4), uint64(100))),
+			&Event{"ChainSpecificProxyCreationL2", "ChainSpecificProxyCreationL2(address,address,bytes,uint256,uint256)", args(
+				Arg{"proxy", "address", alice}, Arg{"singleton", "address", bob},
+				Arg{"initializer", "bytes", ethrpc.Bytes("init")}, Arg{"saltNonce", "uint256", big.NewInt(4)}, Arg{"chainId", "uint256", big.NewInt(100)},
+			)},
+		},
 	}
 	for _, test := range tests {
 		got := Decode(test.log)
@@ -153,6 +169,22 @@ func TestDefinitionsHaveUniqueLayouts(t *testing.T) {
 				t.Errorf("%x: two definitions of %s have %d indexed parameters", topic, def.signature, indexed)
 			}
 			seen[indexed] = true
+		}
+	}
+}
+
+// TestProxyFactoryTopics checks the topics of the proxy factory events against
+// those of the factories' sources, computed apart from this package.
+func TestProxyFactoryTopics(t *testing.T) {
+	for topic, name := range map[string]string{
+		"0xa38789425dbeee0239e16ff2d2567e31720127fbc6430758c1a4efc6aef29f80": "ProxyCreation",
+		"0x4f51faf6c4561ff95f067657e43439f0f856d97c04d9ec9070a6199ad418e235": "ProxyCreation",
+		"0x6e78ae8c51534f0b801d7aa7cce5a2113f3c3368c61b06fa61415f361d400431": "ProxyCreationL2",
+		"0x7a1c96f74273709828c0e67ab96189772005d3b4948bc6902693eb21e4e2cc6a": "ChainSpecificProxyCreationL2",
+	} {
+		defs := definitions[ethrpc.MustParseHash(topic)]
+		if len(defs) == 0 || defs[0].name != name {
+			t.Errorf("%s: got definitions %+v for topic %s", name, defs, topic)
 		}
 	}
 }
