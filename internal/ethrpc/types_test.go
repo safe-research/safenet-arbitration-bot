@@ -2,6 +2,7 @@ package ethrpc
 
 import (
 	"bytes"
+	"math/big"
 	"testing"
 )
 
@@ -127,6 +128,34 @@ func TestBlockNumberText(t *testing.T) {
 	for _, invalid := range []string{"", "0x", "10", "0xg", "0x10000000000000000"} {
 		var n BlockNumber
 		if err := n.UnmarshalText([]byte(invalid)); err == nil {
+			t.Errorf("UnmarshalText(%q): expected an error", invalid)
+		}
+	}
+}
+
+func TestBigQuantityText(t *testing.T) {
+	huge, _ := new(big.Int).SetString("10000000000000000000000000000000000", 16)
+	for _, tc := range []struct {
+		text  string
+		value *big.Int
+	}{
+		{"0x0", new(big.Int)},
+		{"0x1a", big.NewInt(26)},
+		{"0x10000000000000000000000000000000000", huge},
+	} {
+		text, _ := (*BigQuantity)(tc.value).MarshalText()
+		if string(text) != tc.text {
+			t.Errorf("MarshalText(%s): got %s, want %s", tc.value, text, tc.text)
+		}
+		var q BigQuantity
+		if err := q.UnmarshalText([]byte(tc.text)); err != nil || (*big.Int)(&q).Cmp(tc.value) != 0 {
+			t.Errorf("UnmarshalText(%q): got %s, %v; want %s", tc.text, (*big.Int)(&q), err, tc.value)
+		}
+	}
+
+	for _, invalid := range []string{"", "0x", "1a", "0xg", "0x-1", "0x+1"} {
+		var q BigQuantity
+		if err := q.UnmarshalText([]byte(invalid)); err == nil {
 			t.Errorf("UnmarshalText(%q): expected an error", invalid)
 		}
 	}

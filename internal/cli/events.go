@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -125,10 +126,14 @@ func eventsCommand(ctx context.Context, e *env, args []string) error {
 	return nil
 }
 
-// formatValue formats an argument of an event, shortening long bytes.
+// formatValue formats a decoded value, such as an argument of an event,
+// shortening long bytes, and quoting a string, which can hold any characters.
 func formatValue(value any) string {
 	if b, ok := value.(ethrpc.Bytes); ok && len(b) > maxTextBytes {
 		return fmt.Sprintf("%s... (%d bytes)", b[:maxTextBytes], len(b))
+	}
+	if s, ok := value.(string); ok {
+		return strconv.Quote(s)
 	}
 	return fmt.Sprint(value)
 }

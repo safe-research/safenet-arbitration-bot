@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
 )
 
@@ -23,9 +24,11 @@ type safeRef struct {
 	ChainID uint64
 	// SafeBlock is the request's Safe block.
 	SafeBlock uint64
-	// SafeTxHash is the hash of the request's Safe transaction.
-	SafeTxHash ethrpc.Hash
-	eth        *ethrpc.Client
+	// SafeTxHash is the hash of the request's Safe transaction, and Transaction the
+	// transaction.
+	SafeTxHash  ethrpc.Hash
+	Transaction *safenet.SafeTransaction
+	eth         *ethrpc.Client
 }
 
 // openSafe reads the request in the file at requestFile, as written by arbot
@@ -45,7 +48,7 @@ func openSafe(ctx context.Context, e *env, requestFile string) (*safeRef, error)
 	if tx.ChainID == nil || !tx.ChainID.IsUint64() || request.Proposal.SafeBlock == 0 {
 		return nil, fmt.Errorf("request in %s has no Safe chain ID or block", requestFile)
 	}
-	s := &safeRef{Safe: tx.Safe, ChainID: tx.ChainID.Uint64(), SafeBlock: request.Proposal.SafeBlock, SafeTxHash: request.Proposal.SafeTxHash}
+	s := &safeRef{Safe: tx.Safe, ChainID: tx.ChainID.Uint64(), SafeBlock: request.Proposal.SafeBlock, SafeTxHash: request.Proposal.SafeTxHash, Transaction: &tx}
 	if s.eth, err = ethrpc.NewDialer(e.cfg.RPCs)(ctx, s.ChainID); err != nil {
 		return nil, err
 	}
