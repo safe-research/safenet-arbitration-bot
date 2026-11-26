@@ -55,7 +55,7 @@ type Account struct {
 }
 
 // Contract is a contract of a Safe version of § 2.1: MultiSend,
-// MultiSendCallOnly, or the Safe or SafeL2 singleton.
+// MultiSendCallOnly, CreateCall, or the Safe or SafeL2 singleton.
 type Contract struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -83,6 +83,9 @@ type Call struct {
 	// ABI layout only, if it is one. What the call does depends on the account that
 	// it is to.
 	Function *functions.Function `json:"function"`
+	// Creates is the contract that a call to a CreateCall of a § 2.1 version
+	// deploys, derived from its data, if the call is one, and left out otherwise.
+	Creates *Creation `json:"creates,omitempty"`
 }
 
 // callKinds are the names of the kinds of calls, by callKind.
@@ -93,13 +96,15 @@ var callKinds = []string{Root: "root", Batched: "batched", Refund: "refund"}
 // 2.1 versions are decoded into the calls that they make, a call that reverts
 // whatever the state or makes no calls is replaced by a placeholder, and a
 // synthetic call pays the largest gas refund that the transaction allows, if
-// any. It reads the Safe and the accounts that it calls on the Safe's chain at
-// the proposal's SafeBlock, connecting with dial.
+// any. A call to a CreateCall of a § 2.1 version has the contract that it
+// deploys, whose address for CREATE it derives from the deployer's nonce at the
+// SafeBlock. It reads the Safe and the accounts that it calls on the Safe's
+// chain at the proposal's SafeBlock, connecting with dial.
 //
 // Contracts are identified by their address, since the contracts of § 2.1
 // versions are deterministic deployments, and only on the networks that the
-// Charter covers, which they are deployed on. An address without code isn't
-// identified.
+// Charter covers, which they are deployed on, and CreateCall by its code hash
+// too. An address without code isn't identified.
 func Calls(ctx context.Context, dial ethrpc.Dialer, request *safenet.Request) (*TransactionCalls, error) {
 	tx := &request.Proposal.Transaction
 	// A malformed transaction is an error before anything is read.
@@ -116,12 +121,19 @@ func Calls(ctx context.Context, dial ethrpc.Dialer, request *safenet.Request) (*
 	if err != nil {
 		return nil, err
 	}
-	return NewCallReader(client, tx.Safe, ethrpc.BlockNumber(request.Proposal.SafeBlock)).Calls(ctx, tx)
+	reader := NewCallReader(client, tx.Safe, ethrpc.BlockNumber(request.Proposal.SafeBlock))
+	// The proposal's transaction would run on the state at its SafeBlock if it ran
+	// next, so the deployers' nonces there are those that it would deploy with.
+	reader.createNonces = true
+	return reader.Calls(ctx, tx)
 }
 
 // CallReader reads the calls of the Safe transactions of a Safe, as Calls does,
 // such as those that the Safe executed before a proposal, as of one block. It
-// reads each account once, so that it can read many transactions.
+// reads each account once, so that it can read many transactions. Unlike Calls,
+// it derives the addresses of the contracts that CreateCall deploys with
+// CREATE2 only, which don't depend on the state, since a transaction that ran
+// in another block had other nonces.
 type CallReader struct {
 	client  *ethrpc.Client
 	block   ethrpc.BlockNumber
@@ -131,6 +143,9 @@ type CallReader struct {
 	codes   map[ethrpc.Address]ethrpc.Bytes
 	// safeAccount is the Safe, once read.
 	safeAccount *SafeAccount
+	// createNonces is whether the reader derives the addresses of the contracts
+	// that CreateCall deploys with CREATE, from the deployers' nonces at the block.
+	createNonces bool
 }
 
 // NewCallReader returns a reader of the calls of the Safe at safe, on the chain
@@ -186,6 +201,9 @@ func (r *CallReader) Calls(ctx context.Context, tx *safenet.SafeTransaction) (*T
 			}
 		}
 		report.Calls = append(report.Calls, reported)
+	}
+	if err := r.creations(ctx, report.Calls); err != nil {
+		return nil, err
 	}
 	return report, nil
 }
@@ -259,6 +277,9 @@ func (r *CallReader) Account(ctx context.Context, address ethrpc.Address) (Accou
 	}
 	if r.covered && len(c) > 0 {
 		a.Contract = contractAt(address)
+		if cc, ok := isCreateCall(address, c); ok {
+			a.Contract = &Contract{Name: "CreateCall", Version: cc.version}
+		}
 	}
 	return a, nil
 }
