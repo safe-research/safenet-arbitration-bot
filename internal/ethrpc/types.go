@@ -276,6 +276,21 @@ type CallFrame struct {
 	Calls        []CallFrame `json:"calls"`
 }
 
+// Check returns an error if f, or a call that it makes, has no type, as JSON
+// that isn't a trace of the callTracer has, such as {} or the opcode trace of
+// the default tracer, which would otherwise decode as a call that makes none.
+func (f *CallFrame) Check() error {
+	if f.Type == "" {
+		return errors.New("not a callTracer trace: a call has no type")
+	}
+	for i := range f.Calls {
+		if err := f.Calls[i].Check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Error is an error returned by the JSON-RPC server.
 type Error struct {
 	Code    int    `json:"code"`

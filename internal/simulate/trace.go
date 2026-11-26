@@ -1,6 +1,7 @@
 package simulate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,8 +17,8 @@ import (
 // every call that it makes, nested to any depth, including those that create
 // contracts.
 type Trace struct {
-	// Available is whether the node served the trace, and Reason is its error if it
-	// didn't.
+	// Available is whether the node served the trace, and Reason is why it didn't:
+	// its error, or that the call wasn't traced.
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
 	// Calls are the frames of the trace, the simulated call first, each followed by
@@ -64,7 +65,8 @@ const maxTraceDepth = 1100
 // other than 429, such as a 401 page or a 503, give a trace that isn't
 // available, with the error as its reason, as arbot executions reads a refused
 // trace. A rate limit, a dropped connection, or a response that isn't JSON-RPC
-// fails, since the node may serve traces.
+// fails, since the node may serve traces, and so does a result that isn't a
+// callTracer trace of sim's call, such as null.
 func TraceCall(ctx context.Context, eth *ethrpc.Client, sim Simulation, block ethrpc.BlockNumber) (*Trace, error) {
 	var top *ethrpc.CallFrame
 	err := eth.RawRequest(ctx, &top, "debug_traceCall", sim.Request, block, map[string]any{"tracer": "callTracer"})
@@ -74,6 +76,13 @@ func TraceCall(ctx context.Context, eth *ethrpc.Client, sim Simulation, block et
 	case err == nil && top == nil:
 		return nil, fmt.Errorf("tracing the call to %s: debug_traceCall: null result", sim.Request.To)
 	case err == nil:
+		if err := top.Check(); err != nil {
+			return nil, fmt.Errorf("tracing the call to %s: debug_traceCall: %w", sim.Request.To, err)
+		}
+		if !strings.EqualFold(top.Type, "CALL") || top.From != sim.Request.From || top.To == nil || *top.To != sim.Request.To ||
+			!bytes.Equal(top.Input, sim.Request.Data) {
+			return nil, fmt.Errorf("tracing the call to %s: debug_traceCall: the trace's top call isn't the simulated call", sim.Request.To)
+		}
 		return traceOf(top)
 	case refused && httpErr.StatusCode != http.StatusTooManyRequests,
 		!refused && answered && (!ethrpc.Transient(err) || ethrpc.TimedOut(err)):

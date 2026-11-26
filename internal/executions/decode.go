@@ -271,7 +271,7 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 		// Timeout, which may be brief, or for a trace that timed out or of a block
 		// whose state the node doesn't keep, is a warning about this transaction only.
 		// A rate limit or a dropped connection is a failure, though, since the node may
-		// serve traces, and so is a null result, which isn't a trace.
+		// serve traces, and so is a result that isn't a callTracer trace, such as null.
 		err := d.Eth.RawRequest(ctx, &root, "debug_traceTransaction", e.TxHash, map[string]any{"tracer": "callTracer"})
 		// An HTTP rate limit is one whatever JSON-RPC error its body has.
 		httpErr, refused := errors.AsType[*ethrpc.HTTPError](err)
@@ -282,6 +282,10 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 			d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: null result", e.TxHash))
 			return nil
 		case err == nil:
+			if err := root.Check(); err != nil {
+				d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: %w", e.TxHash, err))
+				return nil
+			}
 			txs = d.byHash(i, callsTo(root, d.safe, nil), nonces)
 		case unserved(err):
 			d.untraced = true

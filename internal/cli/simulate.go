@@ -53,8 +53,11 @@ func simulateCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "§ 2.1 version, and says why, as arbot safe does.\n\n")
 		fmt.Fprintf(out, "With -trace, it also runs debug_traceCall with the callTracer on the same call, and lists every call\n")
 		fmt.Fprintf(out, "nested in it, and every contract that it creates with CREATE or CREATE2, or says why the trace is\n")
-		fmt.Fprintf(out, "unavailable, such as a node that doesn't serve traces, or refuses them. For a delegate call, the top\n")
-		fmt.Fprintf(out, "frame is the Safe's simulateAndRevert, which always reverts.\n\n")
+		fmt.Fprintf(out, "unavailable, such as a node that doesn't serve traces, or refuses them, or a call that sends more\n")
+		fmt.Fprintf(out, "than the Safe's balance, which isn't traced. A result that isn't a callTracer trace of the call, such\n")
+		fmt.Fprintf(out, "as null, fails. For a delegate call, the top two frames, the Safe's simulateAndRevert and its delegate\n")
+		fmt.Fprintf(out, "call to its singleton, always revert. The list of created contracts says which were rolled back by the\n")
+		fmt.Fprintf(out, "failure of a frame that they are nested in, other than those two, even if the failure was caught.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
@@ -83,7 +86,11 @@ func simulateCommand(ctx context.Context, e *env, args []string) error {
 	if report.Result, err = simulate.Run(ctx, ref.eth, sim, block); err != nil {
 		return err
 	}
-	if *withTrace {
+	switch {
+	case *withTrace && report.Result.ValueShortfall != nil:
+		// The simulation didn't run the call, and nodes reject it before tracing it.
+		report.Trace = &simulate.Trace{Reason: "not traced: the call sends more than the Safe's balance", Calls: []simulate.Frame{}}
+	case *withTrace:
 		if report.Trace, err = simulate.TraceCall(ctx, ref.eth, sim, block); err != nil {
 			return err
 		}
@@ -123,7 +130,7 @@ func printSimulation(e *env, report *simulateReport, tx *safenet.SafeTransaction
 	}
 	fmt.Fprintf(e.stdout, "  Returned   %s\n", wordsText(result.ReturnData))
 	if report.Trace != nil {
-		return printTrace(e, report.Trace)
+		return printTrace(e, report.Trace, result.Method)
 	}
 	return nil
 }
@@ -142,9 +149,9 @@ func cell(text string) string {
 	return printable(text)
 }
 
-// printTrace writes the trace of a simulation, with a table of the frames that
-// create contracts.
-func printTrace(e *env, t *simulate.Trace) error {
+// printTrace writes the trace of a simulation with method, with a table of the
+// frames that create contracts.
+func printTrace(e *env, t *simulate.Trace, method string) error {
 	if !t.Available {
 		fmt.Fprintf(e.stdout, "\nTrace unavailable: %q\n", t.Reason)
 		return nil
@@ -169,11 +176,34 @@ func printTrace(e *env, t *simulate.Trace) error {
 		return err
 	}
 	fmt.Fprintf(e.stdout, "\nCreated contracts\n\n")
-	var creations []simulate.Frame
-	for _, f := range t.Calls {
-		if f.InitCodeHash != nil {
-			creations = append(creations, f)
+	// A creation is rolled back if a frame that it is nested in failed, even if the
+	// failure was caught, though not by the two frames above the simulated call of
+	// a delegate call, simulateAndRevert's, which always revert. undone[d] is the
+	// number of the nearest such frame that the frame at depth d is or is nested
+	// in, or 0 for none.
+	first := 0
+	if method == simulate.MethodSimulateAndRevert {
+		first = 2
+	}
+	type creation struct {
+		simulate.Frame
+		undone int
+	}
+	var creations []creation
+	var undone []int
+	for i, f := range t.Calls {
+		undone = undone[:f.Depth]
+		parent := 0
+		if f.Depth > 0 {
+			parent = undone[f.Depth-1]
 		}
+		if f.InitCodeHash != nil {
+			creations = append(creations, creation{f, parent})
+		}
+		if f.Error != "" && f.Depth >= first {
+			parent = i + 1
+		}
+		undone = append(undone, parent)
 	}
 	if len(creations) == 0 {
 		fmt.Fprintf(e.stdout, "  none\n")
@@ -186,7 +216,11 @@ func printTrace(e *env, t *simulate.Trace) error {
 		if c.To != nil {
 			address = c.To.String()
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d bytes, hash %s\t%s\n", c.Depth, cell(c.Type), address, c.From, c.InputSize, *c.InitCodeHash, errorText(c.Error, ""))
+		status := errorText(c.Error, "")
+		if c.Error == "" && c.undone != 0 {
+			status = fmt.Sprintf("rolled back: #%d failed", c.undone)
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d bytes, hash %s\t%s\n", c.Depth, cell(c.Type), address, c.From, c.InputSize, *c.InitCodeHash, status)
 	}
 	return w.Flush()
 }

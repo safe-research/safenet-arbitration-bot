@@ -2,6 +2,7 @@ package ethrpc
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/big"
 	"strings"
 	"testing"
@@ -164,6 +165,26 @@ func TestBigQuantityText(t *testing.T) {
 		var q BigQuantity
 		if err := q.UnmarshalText([]byte(invalid)); err == nil {
 			t.Errorf("UnmarshalText(%q): expected an error", invalid)
+		}
+	}
+}
+
+func TestCallFrameCheck(t *testing.T) {
+	for _, test := range []struct {
+		raw   string
+		valid bool
+	}{
+		{`{"type": "CALL", "calls": [{"type": "CREATE"}]}`, true},
+		{`{}`, false},
+		{`{"gas": 21000, "failed": false, "returnValue": "", "structLogs": []}`, false},
+		{`{"type": "CALL", "calls": [{"type": "CALL", "calls": [{}]}]}`, false},
+	} {
+		var f CallFrame
+		if err := json.Unmarshal([]byte(test.raw), &f); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Check(); (err == nil) != test.valid {
+			t.Errorf("Check of %s: got %v, want valid %t", test.raw, err, test.valid)
 		}
 	}
 }

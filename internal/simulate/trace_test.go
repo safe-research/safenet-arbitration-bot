@@ -171,4 +171,16 @@ func TestTraceCall(t *testing.T) {
 			t.Errorf("TraceCall with %s: got %+v, %v; want an error", name, trace, err)
 		}
 	}
+	// Nor is a result that isn't a callTracer trace of the simulated call.
+	for name, result := range map[string]string{
+		"empty object":  `{}`,
+		"untyped call":  `{"type": "CALL", "from": "0x5a000000000000000000000000000000000000fe", "to": "0xc000000000000000000000000000000000000001", "input": "0x", "calls": [{}]}`,
+		"other data":    `{"type": "CALL", "from": "0x5a000000000000000000000000000000000000fe", "to": "0xc000000000000000000000000000000000000001", "input": "0x01"}`,
+		"other account": `{"type": "CALL", "from": "0x5a000000000000000000000000000000000000fe", "to": "0xc000000000000000000000000000000000000002", "input": "0x"}`,
+	} {
+		n := &node{trace: json.RawMessage(result)}
+		if trace, err := TraceCall(t.Context(), n.serve(t), sim, 100); err == nil {
+			t.Errorf("TraceCall with %s: got %+v; want an error", name, trace)
+		}
+	}
 }
