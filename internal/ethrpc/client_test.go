@@ -641,7 +641,7 @@ func TestRequestHTTPErrorType(t *testing.T) {
 
 func TestNullResult(t *testing.T) {
 	// A null result is no answer, rather than empty return data, no code, a zero
-	// slot, or block 0.
+	// slot, block 0, or no logs.
 	url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
 		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": nil})
 	})
@@ -651,6 +651,13 @@ func TestNullResult(t *testing.T) {
 		"BlockNumber":  func() (any, error) { return client.BlockNumber(t.Context()) },
 		"GetCode":      func() (any, error) { return client.GetCode(t.Context(), Address{}, 1) },
 		"GetStorageAt": func() (any, error) { return client.GetStorageAt(t.Context(), Address{}, Hash{}, 1) },
+		"GetLogs":      func() (any, error) { return client.GetLogs(t.Context(), LogFilter{}) },
+		"ScanLogs": func() (any, error) {
+			for log, err := range client.ScanLogs(t.Context(), LogFilter{FromBlock: 1, ToBlock: 1}) {
+				return log, err
+			}
+			return nil, nil
+		},
 	} {
 		if got, err := request(); err == nil || !strings.Contains(err.Error(), "null result") {
 			t.Errorf("%s: got %v, %v; want an error about the null result", name, got, err)

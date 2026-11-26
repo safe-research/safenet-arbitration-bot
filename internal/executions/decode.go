@@ -208,27 +208,33 @@ func (d *decoder) fromCalldata(ctx context.Context, e Execution, nonce *big.Int)
 func (d *decoder) fromTrace(ctx context.Context, e Execution, nonce *big.Int) *safenet.SafeTransaction {
 	inputs, ok := d.traces[e.TxHash]
 	if !ok && !d.untraced {
-		var root callFrame
+		var root *callFrame
 		// Most public nodes don't serve traces, so the next source may have the
 		// transaction. A node that says that it doesn't serve the method, or refuses it
 		// with an HTTP error status rather than a JSON-RPC error, such as a 401 or 406
-		// page or a 503, which is a warning, would answer every trace the same way, so
-		// it isn't asked for more. Another error, such as for a trace that timed out or
-		// of a block whose state the node doesn't keep, is a warning about this
-		// transaction only. A rate limit or a dropped connection is a failure, though,
-		// since the node may serve traces.
+		// page, which is a warning, would answer every trace the same way, so it isn't
+		// asked for more. Another error, such as a server error or a 408 Request
+		// Timeout, which may be brief, or for a trace that timed out or of a block
+		// whose state the node doesn't keep, is a warning about this transaction only.
+		// A rate limit or a dropped connection is a failure, though, since the node may
+		// serve traces, and so is a null result, which isn't a trace.
 		err := d.Eth.RawRequest(ctx, &root, "debug_traceTransaction", e.TxHash, map[string]any{"tracer": "callTracer"})
+		// An HTTP rate limit is one whatever JSON-RPC error its body has.
 		httpErr, refused := errors.AsType[*ethrpc.HTTPError](err)
-		refused = refused && httpErr.StatusCode != http.StatusTooManyRequests && ethrpc.Transient(err)
+		limited := refused && httpErr.StatusCode == http.StatusTooManyRequests
+		refused = refused && !limited && ethrpc.Transient(err)
 		switch {
+		case err == nil && root == nil:
+			d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: null result", e.TxHash))
+			return nil
 		case err == nil:
 			inputs = root.callsTo(d.safe, nil)
 		case unserved(err):
 			d.untraced = true
-		case refused:
+		case refused && httpErr.StatusCode < http.StatusInternalServerError && httpErr.StatusCode != http.StatusRequestTimeout:
 			d.warn(fmt.Errorf("the node refused a trace, so no more are asked for: tracing transaction %s: %w", e.TxHash, err))
 			d.untraced = true
-		case ethrpc.Transient(err) && !ethrpc.TimedOut(err):
+		case limited, !refused && ethrpc.Transient(err) && !ethrpc.TimedOut(err):
 			d.fail(fmt.Errorf("tracing transaction %s: %w", e.TxHash, err))
 			return nil
 		default:
@@ -264,10 +270,11 @@ func (d *decoder) candidate(input []byte, e Execution, nonce *big.Int) *safenet.
 // unserved reports whether err is a node's answer that it doesn't serve the
 // method: JSON-RPC's "Method not found", or "Invalid Request", which some nodes
 // answer for a method that they don't allow, or EIP-1474's
-// "Method not supported".
+// "Method not supported". A transient error is never one, even if its body has
+// one of those, since the node didn't answer.
 func unserved(err error) bool {
 	rpcErr, ok := errors.AsType[*ethrpc.Error](err)
-	return ok && (rpcErr.Code == -32601 || rpcErr.Code == -32600 || rpcErr.Code == -32004)
+	return ok && !ethrpc.Transient(err) && (rpcErr.Code == -32601 || rpcErr.Code == -32600 || rpcErr.Code == -32004)
 }
 
 func (d *decoder) fail(err error) {

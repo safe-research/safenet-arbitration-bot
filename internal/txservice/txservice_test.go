@@ -134,14 +134,16 @@ func TestTransactionErrors(t *testing.T) {
 func TestTransactionAtWrongURL(t *testing.T) {
 	// Any server answers a wrong URL with 404, so that only says that the service
 	// doesn't have the transaction if the server has the service's about page,
-	// which the client asks for once.
-	for _, about := range []bool{true, false} {
+	// which the client asks for once. Other servers have about pages too, such as
+	// Safe's Config Service, whose page is the last one here.
+	const service = `{"name": "Safe Transaction Service"}`
+	for _, about := range []string{service, "", `{}`, `{"name": "Safe Config Service", "version": "v2.114.1", "apiVersion": "v1", "secure": true}`} {
 		var abouts atomic.Int64
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/v1/about/" {
 				abouts.Add(1)
-				if about {
-					w.Write([]byte(`{"name": "Safe Transaction Service"}`))
+				if about != "" {
+					w.Write([]byte(about))
 					return
 				}
 			}
@@ -151,12 +153,12 @@ func TestTransactionAtWrongURL(t *testing.T) {
 		client := NewClient(server.URL, ethrpc.Mainnet)
 		for range 2 {
 			_, err := client.Transaction(t.Context(), hash)
-			if about && !errors.Is(err, ErrNotFound) || !about && (err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "about page")) {
-				t.Errorf("about page %t: Transaction got error %v", about, err)
+			if about == service && !errors.Is(err, ErrNotFound) || about != service && (err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "about page")) {
+				t.Errorf("about page %q: Transaction got error %v", about, err)
 			}
 		}
 		if abouts.Load() != 1 {
-			t.Errorf("about page %t: Transaction asked for the about page %d times, want once", about, abouts.Load())
+			t.Errorf("about page %q: Transaction asked for the about page %d times, want once", about, abouts.Load())
 		}
 	}
 	// An about page that fails to answer says neither, so the service is

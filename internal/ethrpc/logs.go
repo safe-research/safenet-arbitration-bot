@@ -24,7 +24,8 @@ func (c *Client) ScanLogs(ctx context.Context, filter LogFilter) iter.Seq2[Log, 
 	return func(yield func(Log, error) bool) {
 		// A node that does limit the range fails a chunk that was doubled again, so
 		// each time that happens, twice as many chunks must succeed before the next
-		// doubling: wait of them, of which succeeded have since the last change.
+		// doubling. wait is how many must, and succeeded is how many have since the
+		// range last changed.
 		step, wait, succeeded, doubled := maxLogRange, 1, 0, false
 		for from := filter.FromBlock; from <= filter.ToBlock; {
 			chunk := filter
@@ -37,8 +38,7 @@ func (c *Client) ScanLogs(ctx context.Context, filter LogFilter) iter.Seq2[Log, 
 			if step == minLogRange {
 				retryable = rateLimited
 			}
-			var logs []Log
-			err := c.retrying(ctx, retryable, &logs, "eth_getLogs", chunk)
+			logs, err := c.getLogs(ctx, retryable, chunk)
 			// A JSON-RPC error may be about the range. An HTTP rate limit or server error
 			// isn't, nor is a rate limit, and a smaller range only means more requests.
 			if _, ok := errors.AsType[*Error](err); ok && !refused(err) && !throttled(err) && step > minLogRange {

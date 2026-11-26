@@ -51,7 +51,8 @@ type chain struct {
 	empty bool
 	// failing are the methods that the node fails, with their HTTP status, such as
 	// 500 for an overloaded node, 429 for a rate limit, or 403 or 200 for a page
-	// that a proxy sends instead of a JSON-RPC response.
+	// that a proxy sends instead of a JSON-RPC response, or with the method's error
+	// in erring as the body, as some nodes send one.
 	failing map[string]int
 	// resetting are the methods whose responses the node cuts off with a TCP reset,
 	// as an overloaded proxy does.
@@ -94,6 +95,11 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 		}
 		if status, ok := c.failing[req.Method]; ok {
 			w.Header().Set("Retry-After", "0")
+			if rpcErr, ok := c.erring[req.Method]; ok {
+				w.WriteHeader(status)
+				json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": rpcErr})
+				return
+			}
 			http.Error(w, http.StatusText(status), status)
 			return
 		}
@@ -668,22 +674,17 @@ func relayedChain(first, second *safenet.SafeTransaction) *chain {
 }
 
 func TestFindTraceRefused(t *testing.T) {
-	// Some nodes refuse debug_traceTransaction with an HTTP error status, such as
-	// 401, 406 or 503, which leaves the transactions unknown with one warning
+	// Some nodes refuse debug_traceTransaction with an HTTP error status, such as a
+	// 401 or 406 page, which leaves the transactions unknown with one warning
 	// rather than failing, and others don't serve the method, without a warning.
 	// Either would answer every trace the same way, so only one is asked for.
 	first, second := transaction("relayed", 0), transaction("relayed again", 1)
-	for _, status := range []int{http.StatusUnauthorized, http.StatusNotAcceptable, http.StatusServiceUnavailable, 0} {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusNotAcceptable, 0} {
 		c := relayedChain(first, second)
-		// httpretry sends a trace that fails with 503 again.
 		warns, traces := 1, int64(1)
-		switch status {
-		case 0:
+		if status == 0 {
 			warns = 0
-		case http.StatusServiceUnavailable:
-			traces += httpretry.DefaultRetries
-		}
-		if status != 0 {
+		} else {
 			c.failing = map[string]int{"debug_traceTransaction": status}
 		}
 		f := &Finder{Eth: c.serve(t)}
@@ -704,18 +705,69 @@ func TestFindTraceRefused(t *testing.T) {
 	}
 }
 
+func TestFindTraceServerError(t *testing.T) {
+	// A server error, such as a 503 from a gateway whose node is briefly down, may
+	// only be about that trace, even with a JSON-RPC error in its body, and so may
+	// a 408 for a trace that took too long, so each trace warns, and the next one
+	// is asked for too. httpretry sends a 503 again, but not a 408.
+	first, second := transaction("relayed", 0), transaction("relayed again", 1)
+	for _, tc := range []struct {
+		status int
+		rpcErr *ethrpc.Error
+		traces int64
+	}{
+		{http.StatusServiceUnavailable, nil, 2 * (1 + httpretry.DefaultRetries)},
+		{http.StatusServiceUnavailable, &ethrpc.Error{Code: -32601, Message: "method not found"}, 2 * (1 + httpretry.DefaultRetries)},
+		{http.StatusRequestTimeout, nil, 2},
+	} {
+		c := relayedChain(first, second)
+		c.failing = map[string]int{"debug_traceTransaction": tc.status}
+		if tc.rpcErr != nil {
+			c.erring = map[string]ethrpc.Error{"debug_traceTransaction": *tc.rpcErr}
+		}
+		f := &Finder{Eth: c.serve(t)}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.Find(t.Context(), safe, 0, 200)
+		if err != nil || len(got) != 2 || got[0].Transaction != nil || got[1].Transaction != nil || len(warnings) != 2 || c.traced.Load() != tc.traces {
+			t.Errorf("HTTP %d with %v: Find got %+v, %v, warnings %v after %d trace requests; want two unknown transactions with 2 warnings after %d",
+				tc.status, tc.rpcErr, got, err, warnings, c.traced.Load(), tc.traces)
+		}
+	}
+}
+
 func TestFindTraceRateLimit(t *testing.T) {
 	// A node that rate limits traces may serve them, so Find fails rather than
-	// report an unknown transaction.
+	// report an unknown transaction, whatever JSON-RPC error the response has.
+	tx := transaction("relayed", 1)
+	for _, rpcErr := range []*ethrpc.Error{nil, {Code: -32601, Message: "method not found"}, {Code: -32600, Message: "rate limited"}, &nodeTimeout} {
+		c := &chain{
+			logs:    []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
+			nonce:   big.NewInt(2),
+			txs:     map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
+			failing: map[string]int{"debug_traceTransaction": http.StatusTooManyRequests},
+		}
+		if rpcErr != nil {
+			c.erring = map[string]ethrpc.Error{"debug_traceTransaction": *rpcErr}
+		}
+		if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); !ethrpc.Transient(err) {
+			t.Errorf("HTTP 429 with %v: Find got %+v, %v; want a transient error", rpcErr, got, err)
+		}
+	}
+}
+
+func TestFindTraceNull(t *testing.T) {
+	// A null trace isn't one, so Find fails rather than read it as a trace without
+	// calls to the Safe.
 	tx := transaction("relayed", 1)
 	c := &chain{
-		logs:    []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
-		nonce:   big.NewInt(2),
-		txs:     map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
-		failing: map[string]int{"debug_traceTransaction": http.StatusTooManyRequests},
+		logs:   []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
+		nonce:  big.NewInt(2),
+		txs:    map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
+		traces: map[ethrpc.Hash]any{hash(1): nil},
 	}
-	if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); !ethrpc.Transient(err) {
-		t.Errorf("Find: got %+v, %v; want a transient error", got, err)
+	if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); err == nil || !strings.Contains(err.Error(), "null result") {
+		t.Errorf("Find: got %+v, %v; want an error about the null result", got, err)
 	}
 }
 

@@ -130,18 +130,25 @@ func (c *Client) confirm(ctx context.Context) error {
 }
 
 // about returns an error unless the server at the base URL answers the about
-// page of a service.
+// page of a service, which has the service's name. Other servers have about
+// pages too, such as Safe's Config Service.
 func (c *Client) about(ctx context.Context) error {
 	u, err := url.JoinPath(c.baseURL, "api", "v1", "about")
 	if err != nil {
 		return err
 	}
-	err = c.get(ctx, u+"/", &struct{}{})
+	var about struct {
+		Name string `json:"name"`
+	}
+	err = c.get(ctx, u+"/", &about)
 	if errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("HTTP 404 Not Found: the service at %q has no about page, so it isn't a Safe Transaction Service", c.baseURL)
 	}
 	if err != nil {
 		return fmt.Errorf("getting the about page of the service at %q: %w", c.baseURL, err)
+	}
+	if about.Name != "Safe Transaction Service" {
+		return fmt.Errorf("the about page of the service at %q names %q, so it isn't a Safe Transaction Service", c.baseURL, snippet([]byte(about.Name)))
 	}
 	return nil
 }
@@ -448,7 +455,8 @@ func (c *Client) get(ctx context.Context, u string, v any) error {
 		return fmt.Errorf("response exceeds %d bytes", maxResponseSize)
 	}
 	if err := json.Unmarshal(body, v); err != nil {
-		// JSON that doesn't decode is the service's answer, if a malformed one.
+		// JSON that doesn't decode is the service's answer, if a malformed one, but a
+		// body that isn't JSON, such as an error page, isn't an answer.
 		if !json.Valid(body) {
 			err = notJSON{err}
 		}

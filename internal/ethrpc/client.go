@@ -175,9 +175,20 @@ func (c *Client) GetStorageAt(ctx context.Context, address Address, slot Hash, b
 // GetLogs returns the logs matching filter (eth_getLogs). Nodes commonly limit
 // the block range of a single request, see ScanLogs for querying wider ranges.
 func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
-	var result []Log
-	err := c.RawRequest(ctx, &result, "eth_getLogs", filter)
-	return result, err
+	return c.getLogs(ctx, rateLimited, filter)
+}
+
+// getLogs is GetLogs, retrying the JSON-RPC errors that retryable reports.
+func (c *Client) getLogs(ctx context.Context, retryable func(error) bool, filter LogFilter) ([]Log, error) {
+	var result *[]Log
+	if err := c.retrying(ctx, retryable, &result, "eth_getLogs", filter); err != nil {
+		return nil, err
+	}
+	// A null result isn't a range without logs.
+	if result == nil {
+		return nil, fmt.Errorf("eth_getLogs: null result for blocks %d to %d", filter.FromBlock, filter.ToBlock)
+	}
+	return *result, nil
 }
 
 // ErrNotFound is the error for a transaction that the node doesn't have. A node
