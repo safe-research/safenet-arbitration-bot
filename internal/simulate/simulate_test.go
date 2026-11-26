@@ -141,31 +141,31 @@ func TestRun(t *testing.T) {
 	}{
 		{
 			"returned", node{result: ethrpc.Bytes{0xaa}, balance: 5}, 5,
-			Result{Method: MethodCall, Status: Success, ReturnData: ethrpc.Bytes{0xaa}}, 1,
+			Result{Method: MethodCall, Origin: safe, Status: Success, ReturnData: ethrpc.Bytes{0xaa}}, 1,
 		},
 		{
 			"reverted", node{answer: reverted(3, "execution reverted: GS013", message)}, 0,
-			Result{Method: MethodCall, Status: Reverted, ReturnData: message, RevertReason: "execution reverted: GS013", Error: gs013}, 1,
+			Result{Method: MethodCall, Origin: safe, Status: Reverted, ReturnData: message, RevertReason: "execution reverted: GS013", Error: gs013}, 1,
 		},
 		{
 			// A node that answers a revert with another code, and only says so in its
 			// message.
 			"reverted by its message", node{answer: reverted(-32000, "execution reverted", message)}, 0,
-			Result{Method: MethodCall, Status: Reverted, ReturnData: message, RevertReason: "execution reverted", Error: gs013}, 1,
+			Result{Method: MethodCall, Origin: safe, Status: Reverted, ReturnData: message, RevertReason: "execution reverted", Error: gs013}, 1,
 		},
 		{
 			"reverted without data", node{answer: reverted(3, "execution reverted", nil)}, 0,
-			Result{Method: MethodCall, Status: Reverted, ReturnData: ethrpc.Bytes{}, RevertReason: "execution reverted"}, 1,
+			Result{Method: MethodCall, Origin: safe, Status: Reverted, ReturnData: ethrpc.Bytes{}, RevertReason: "execution reverted"}, 1,
 		},
 		{
 			"halted", node{answer: reverted(-32003, "EVM error: InvalidFEOpcode", nil)}, 0,
-			Result{Method: MethodCall, Status: Reverted, ReturnData: ethrpc.Bytes{}, RevertReason: "EVM error: InvalidFEOpcode"}, 1,
+			Result{Method: MethodCall, Origin: safe, Status: Reverted, ReturnData: ethrpc.Bytes{}, RevertReason: "EVM error: InvalidFEOpcode"}, 1,
 		},
 		{
 			// The Safe can't send more than its balance, so the call fails without being
 			// run, which nodes answer with an error that isn't a revert.
 			"more than the balance", node{balance: 4, answer: reverted(-32003, "Insufficient funds for gas * price + value", nil)}, 5,
-			Result{Method: MethodCall, Status: Reverted, ReturnData: ethrpc.Bytes{}, ValueShortfall: big.NewInt(1)}, 0,
+			Result{Method: MethodCall, Origin: safe, Status: Reverted, ReturnData: ethrpc.Bytes{}, ValueShortfall: big.NewInt(1)}, 0,
 		},
 	} {
 		n := test.node

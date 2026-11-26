@@ -45,7 +45,11 @@ const (
 type Result struct {
 	// Method is MethodCall or MethodSimulateAndRevert.
 	Method string `json:"method"`
-	Status Status `json:"status"`
+	// Origin is the simulation's tx.origin: the Safe for a call, and the zero
+	// address for a delegate call. That of an execution is the account that sends
+	// its transaction, which can't be the Safe.
+	Origin ethrpc.Address `json:"origin"`
+	Status Status         `json:"status"`
 	// ReturnData is the data that the call returned, or its revert data, if the
 	// node reports it.
 	ReturnData ethrpc.Bytes `json:"returnData"`
@@ -101,12 +105,18 @@ func TransactionOf(tx *safenet.SafeTransaction) (Simulation, error) {
 // then reverts without being run, though execTransaction is payable, so the
 // executor could send the shortfall.
 //
+// The simulation's tx.origin is sim.Request.From, the Safe for a call, and the
+// zero address for a delegate call, which is its msg.sender too, while that of
+// an execution is the account that sends its transaction. A target that checks
+// tx.origin, such as with require(msg.sender == tx.origin), can therefore do
+// otherwise when the transaction is executed.
+//
 // It fails if a request to the node fails rather than being answered
 // (ethrpc.Transient), or is answered with an error that isn't the call's
 // outcome, so that a node that doesn't run the call is never read as a call
 // that reverted.
 func Run(ctx context.Context, eth *ethrpc.Client, sim Simulation, block ethrpc.BlockNumber) (*Result, error) {
-	result := &Result{Method: sim.Method, Status: Success, ReturnData: ethrpc.Bytes{}}
+	result := &Result{Method: sim.Method, Origin: sim.Request.From, Status: Success, ReturnData: ethrpc.Bytes{}}
 	if value := (*big.Int)(sim.Request.Value); value != nil {
 		balance, err := eth.GetBalance(ctx, sim.Request.From, block)
 		if err != nil {
