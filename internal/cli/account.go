@@ -68,8 +68,9 @@ func accountCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "total supply that it returns, and the Safe's balance of it in its smallest unit, and with -spender,\n")
 		fmt.Fprintf(out, "the Safe's allowance of it to the spender. Any contract can return any name and symbol, so they say\n")
 		fmt.Fprintf(out, "what the contract claims to be, not what it is. The name and symbol are empty if it doesn't return\n")
-		fmt.Fprintf(out, "strings for them, and the decimals and total supply are \"-\" if it doesn't return them. A contract\n")
-		fmt.Fprintf(out, "whose calls revert or halt, such as on an invalid opcode, isn't a token.\n\n")
+		fmt.Fprintf(out, "strings for them, the decimals are \"-\" if its decimals() reverts, halts, or returns no data, and the\n")
+		fmt.Fprintf(out, "total supply if it doesn't return one. A contract whose calls revert or halt, such as on an invalid\n")
+		fmt.Fprintf(out, "opcode, or that answers decimals() with a number above 255 or data that isn't a number, isn't a token.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 1); err != nil {
