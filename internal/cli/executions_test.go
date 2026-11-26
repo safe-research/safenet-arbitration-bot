@@ -15,6 +15,8 @@ import (
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
+	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
+	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 )
 
 func TestExecutionsErrors(t *testing.T) {
@@ -106,6 +108,90 @@ func TestExecutionsAllIncomplete(t *testing.T) {
 	}
 	if want := "warning: the executions found don't account for every nonce below the Safe's nonce 1 at block 200"; !strings.Contains(stderr.String(), want) {
 		t.Errorf("executions -all: got stderr %q, want it to contain %q", stderr.String(), want)
+	}
+}
+
+// listedExecution returns the execution of tx in the transaction hash at block
+// as the service lists it, which is also how it has tx by its hash.
+func listedExecution(tx *safenet.SafeTransaction, hash ethrpc.Hash, block uint64) map[string]any {
+	return map[string]any{
+		"safe": tx.Safe, "to": tx.To, "value": tx.Value.String(), "data": tx.Data, "operation": uint8(tx.Operation),
+		"safeTxGas": tx.SafeTxGas.String(), "baseGas": tx.BaseGas.String(), "gasPrice": tx.GasPrice.String(),
+		"gasToken": tx.GasToken, "refundReceiver": tx.RefundReceiver, "nonce": tx.Nonce.Uint64(),
+		"safeTxHash": tx.Hash(), "transactionHash": hash, "blockNumber": block, "isExecuted": true,
+	}
+}
+
+func TestExecutionsWithoutOldState(t *testing.T) {
+	// Three executions of the Safe, at the nonces 0 to 2, in the blocks 100, 150,
+	// and 180, and a node that doesn't keep the state of old blocks, so it can't
+	// read the Safe's nonce that the calldata and traces need. The service lists
+	// the first and the last, and has the second by its hash, or not.
+	executionSuccess := solabi.Event("ExecutionSuccess(bytes32,uint256)")
+	payment := solabi.Uint(big.NewInt(0))
+	var txs []*safenet.SafeTransaction
+	var logs []ethrpc.Log
+	var listings []map[string]any
+	for n, block := range []uint64{100, 150, 180} {
+		tx := &safenet.SafeTransaction{
+			ChainID: big.NewInt(1), Safe: historySafe, To: historyAlice, Value: big.NewInt(int64(n)), Data: []byte{},
+			SafeTxGas: new(big.Int), BaseGas: new(big.Int), GasPrice: new(big.Int), Nonce: big.NewInt(int64(n)),
+		}
+		txs = append(txs, tx)
+		logs = append(logs, ethrpc.Log{
+			Address: historySafe, Topics: []ethrpc.Hash{executionSuccess, tx.Hash()}, Data: payment[:],
+			BlockNumber: ethrpc.BlockNumber(block), TransactionHash: hashOf(byte(n + 1)),
+		})
+		listings = append(listings, listedExecution(tx, hashOf(byte(n+1)), block))
+	}
+
+	for _, test := range []struct {
+		name string
+		args []string
+		// stateFrom is the first block whose state the node has, and failing the block
+		// of the nonce that it fails to read.
+		stateFrom, failing uint64
+	}{
+		// The nonce is read at the Safe block, and with -all, at the block of the
+		// execution that the service doesn't list.
+		{"executions", nil, 201, 200},
+		{"executions -all", []string{"-all"}, 200, 150},
+	} {
+		for _, known := range []bool{true, false} {
+			service := &historyService{executions: []map[string]any{listings[0], listings[2]}, transactions: map[ethrpc.Hash]map[string]any{}}
+			for i, tx := range txs {
+				if known || i != 1 {
+					service.transactions[tx.Hash()] = listings[i]
+				}
+			}
+			chain := &historyChain{logs: logs, nonce: big.NewInt(3), stateFrom: test.stateFrom}
+			config, request := historyFiles(t, chain.serve(t), service.serve(t))
+			args := append([]string{"-config", config, "executions", "-json", "-request-file", request}, test.args...)
+			code, stdout, stderr := runArbot(t, args...)
+			warning := fmt.Sprintf("warning: reading the nonce of %s at block %d: eth_call: JSON-RPC error -32000: missing trie node", historySafe, test.failing)
+			if !known {
+				// The second transaction is in no source, and the calldata might have had it.
+				if want := "the calldata and traces need the Safe's nonce, and no other source has the transaction"; code != 1 || stdout != "" || !strings.Contains(stderr, want) {
+					t.Errorf("%s without the second transaction: got status %d, stdout %q, stderr %q; want 1 and an error containing %q", test.name, code, stdout, stderr, want)
+				}
+				continue
+			}
+			var got struct {
+				Executions []struct {
+					Source      string                   `json:"source"`
+					Transaction *safenet.SafeTransaction `json:"transaction"`
+				} `json:"executions"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &got); code != 0 || err != nil {
+				t.Fatalf("%s: got status %d, %v\n%s", test.name, code, err, stderr)
+			}
+			if len(got.Executions) != 3 || got.Executions[1].Source != "service" || got.Executions[1].Transaction == nil || got.Executions[1].Transaction.Hash() != txs[1].Hash() {
+				t.Errorf("%s: got executions %+v, want three, the second from the service", test.name, got.Executions)
+			}
+			if n := strings.Count(stderr, "warning: "); n != 1 || !strings.Contains(stderr, warning) {
+				t.Errorf("%s: got stderr %q, want one warning containing %q", test.name, stderr, warning)
+			}
+		}
 	}
 }
 

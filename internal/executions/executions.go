@@ -83,17 +83,22 @@ type Execution struct {
 
 // Finder finds the Safe transactions that a Safe executed on a chain.
 type Finder struct {
-	// Eth is a client for the chain. The node must serve eth_call at the last block
-	// that Find searches, and for FindAll at the blocks of the executions that it
-	// decodes, for the calldata and trace sources, which are otherwise skipped, and
-	// debug_traceTransaction for the trace source.
+	// Eth is a client for the chain. FindAll needs the Safe's nonce at its last
+	// block, which it reads with eth_call. The calldata and trace sources need the
+	// nonce at the last block that Find searches, and for FindAll at the blocks of
+	// the executions that they decode: a read that fails, such as at a block whose
+	// state the node doesn't keep, leaves them out for those executions with a
+	// warning, and fails the search only if no other source has the transaction.
+	// The trace source also needs debug_traceTransaction.
 	Eth *ethrpc.Client
 	// Service is a client for the chain's Safe Transaction Service, or nil to leave
 	// it out.
 	Service *txservice.Client
 	// Warn is called with the errors of sources that failed for a reason other than
 	// not having the transaction, such as a service that refuses the request. A
-	// request that gets no answer fails the search instead. It may be nil.
+	// request that gets no answer fails the search instead, except a trace that the
+	// node refuses, a read of the Safe's nonce (see Eth), and the scans that
+	// FindAll warns about. It may be nil.
 	Warn func(error)
 }
 

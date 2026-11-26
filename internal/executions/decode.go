@@ -31,10 +31,12 @@ type decoder struct {
 	// every block up to to.
 	byBlock bool
 	// nexts are the Safe's nonces at the end of the blocks that they were read at,
-	// or nil for one that couldn't be read.
-	nexts  map[uint64]*big.Int
-	txs    map[ethrpc.Hash]*ethrpc.Transaction
-	traces map[ethrpc.Hash][]ethrpc.Bytes
+	// or nil for one that couldn't be read, and nonceErrs the errors of the reads
+	// that got no answer.
+	nexts     map[uint64]*big.Int
+	nonceErrs map[uint64]error
+	txs       map[ethrpc.Hash]*ethrpc.Transaction
+	traces    map[ethrpc.Hash][]ethrpc.Bytes
 	// err is the first request to the node or the service that failed without an
 	// answer. Such a failure says nothing about the execution, so decoding stops
 	// rather than report it as unknown.
@@ -57,7 +59,8 @@ func (d *decoder) decodeAll(ctx context.Context) error {
 // decode returns the Safe transaction of executions[i] and where it is from, or
 // nothing if no source has it. It returns an error if a request to the node or
 // the service failed without an answer, since the transaction could then be in
-// a source that it couldn't read.
+// a source that it couldn't read, unless the request was for the Safe's nonce
+// and another source has the transaction.
 func (d *decoder) decode(ctx context.Context, i int) (Source, *safenet.SafeTransaction, error) {
 	source, tx := d.decodeSources(ctx, i)
 	if d.err != nil {
@@ -79,8 +82,11 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 		return SourceService, tx
 	}
 
-	// The calldata and traces have no nonce, so it is worked out from the Safe's.
-	if nonce := d.nonce(ctx, i); nonce != nil {
+	// The calldata and traces have no nonce, so it is worked out from the Safe's. A
+	// nonce that the node failed to read leaves them out, which only fails the
+	// decoding if no other source has the transaction.
+	nonce, nonceErr := d.nonce(ctx, i)
+	if nonce != nil {
 		if tx := d.fromCalldata(ctx, e, nonce); tx != nil {
 			return SourceCalldata, tx
 		}
@@ -109,15 +115,20 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 			return SourceService, tx
 		}
 	}
+	if nonceErr != nil {
+		d.fail(fmt.Errorf("the calldata and traces need the Safe's nonce, and no other source has the transaction: %w", nonceErr))
+	}
 	return "", nil
 }
 
-// nonce returns the nonce that executions[i] used, or nil if it is unknown.
-// Every execution uses the Safe's next nonce, so the executions of a range of
-// blocks that the search read in full used the nonces just below the Safe's
-// nonce at its end: up to to for Find, and the execution's own block for
-// FindAll. The executions are in the order of their logs.
-func (d *decoder) nonce(ctx context.Context, i int) *big.Int {
+// nonce returns the nonce that executions[i] used, or nil if it is unknown,
+// with the error of the read of the Safe's nonce if it got no answer. The
+// Safe's nonce is read once for each block, with a warning if that fails. Every
+// execution uses the Safe's next nonce, so the executions of a range of blocks
+// that the search read in full used the nonces just below the Safe's nonce at
+// its end: up to to for Find, and the execution's own block for FindAll. The
+// executions are in the order of their logs.
+func (d *decoder) nonce(ctx context.Context, i int) (*big.Int, error) {
 	block, later := uint64(d.to), len(d.executions)-i-1
 	if d.byBlock {
 		block, later = d.executions[i].Block, 0
@@ -132,15 +143,17 @@ func (d *decoder) nonce(ctx context.Context, i int) *big.Int {
 	if !ok {
 		var err error
 		next, err = d.readNonce(ctx, d.safe, ethrpc.BlockNumber(block))
+		if err != nil {
+			d.warn(err)
+		}
 		// The account logged executions, so the only answer that isn't a nonce is its
 		// code's, such as after a delegate call replaced its singleton. Any other error
 		// is about the node, such as a block whose state it doesn't have.
 		if _, answer := errors.AsType[notNonce](err); err != nil && !answer && !ethrpc.Reverted(err) && !ethrpc.Halted(err) {
-			d.fail(err)
-			return nil
-		}
-		if err != nil {
-			d.warn(err)
+			if d.nonceErrs == nil {
+				d.nonceErrs = make(map[uint64]error)
+			}
+			d.nonceErrs[block] = err
 		}
 		if d.nexts == nil {
 			d.nexts = make(map[uint64]*big.Int)
@@ -148,13 +161,13 @@ func (d *decoder) nonce(ctx context.Context, i int) *big.Int {
 		d.nexts[block] = next
 	}
 	if next == nil {
-		return nil
+		return nil, d.nonceErrs[block]
 	}
 	nonce := new(big.Int).Sub(next, big.NewInt(int64(later+1)))
 	if nonce.Sign() < 0 {
-		return nil
+		return nil, nil
 	}
-	return nonce
+	return nonce, nil
 }
 
 // fromCalldata decodes the Safe transaction of e from the calldata of its
