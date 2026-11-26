@@ -61,17 +61,19 @@ func isCreateCall(address ethrpc.Address, code []byte) (createCall, bool) {
 }
 
 // creations derives the contracts that the calls to a CreateCall of a § 2.1
-// version among calls would deploy, and sets them as the calls' Creates.
+// version among calls would deploy, and sets them as the calls' Creates. A call
+// that sends value deploys nothing, whatever the value argument that CreateCall
+// would pass to CREATE or CREATE2.
 //
 // A CREATE2 address only depends on the call. A CREATE address depends on the
 // deployer's nonce when the call runs: it is the deployer's nonce at the
 // reader's block, plus one for each deployment by the same deployer that an
 // earlier call to a CreateCall makes, since CREATE and CREATE2 both increment
 // it. It doesn't count deployments that other calls make, such as those of a
-// contract that the Safe delegate calls, which the calls don't show. The nonce
-// is only that of the transaction's first call if the transaction runs right
-// after the block, so CREATE addresses are only derived with createNonces, and
-// left out otherwise.
+// contract that the Safe delegate calls, or of the init code that a call to a
+// CreateCall runs, which the calls don't show. The nonce is only that of the
+// transaction's first call if the transaction runs right after the block, so
+// CREATE addresses are only derived with createNonces, and left out otherwise.
 func (r *CallReader) creations(ctx context.Context, calls []Call) error {
 	// deployed counts the deployments of each deployer in the earlier calls, and
 	// nonces are the deployers' nonces at the block.
@@ -83,6 +85,11 @@ func (r *CallReader) creations(ctx context.Context, calls []Call) error {
 		// with its code.
 		toCreateCall := c.To.Contract != nil && c.To.Contract.Name == "CreateCall"
 		if !toCreateCall || c.Kind == "refund" || c.Placeholder != "" || f == nil || (f.Name != "performCreate" && f.Name != "performCreate2") {
+			continue
+		}
+		// CreateCall's functions aren't payable, so a call that sends value reverts and
+		// deploys nothing. The Safe ignores the value of a delegate call.
+		if c.Operation == safenet.OperationCall && c.Value.Sign() != 0 {
 			continue
 		}
 		deployer := c.To.Address

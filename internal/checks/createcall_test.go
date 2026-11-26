@@ -104,7 +104,8 @@ func TestCreate2Vectors(t *testing.T) {
 
 // TestCreateNonces derives CREATE addresses from the deployers' nonces: the
 // Safe's, for a delegate call to CreateCall, and the CreateCall's, for a call,
-// each counting the deployments of the calls before it, CREATE2 included.
+// each counting the deployments of the calls before it, CREATE2 included. A
+// call that sends value reverts, so it deploys nothing.
 func TestCreateNonces(t *testing.T) {
 	f := loadCreateCallFixture(t)
 	safe := ethrpc.Address{0: 0x5a, 19: 0x01}
@@ -126,6 +127,10 @@ func TestCreateNonces(t *testing.T) {
 		call{to: f.CreateCall, value: new(big.Int), data: performCreate, operation: safenet.OperationDelegateCall},
 		call{to: f.CreateCall, value: new(big.Int), data: performCreate, operation: safenet.OperationCall},
 		call{to: other, value: new(big.Int), data: performCreate, operation: safenet.OperationCall},
+		call{to: f.CreateCall, value: big.NewInt(1), data: performCreate, operation: safenet.OperationCall},
+		call{to: f.CreateCall, value: big.NewInt(1), data: performCreate2, operation: safenet.OperationCall},
+		call{to: f.CreateCall, value: big.NewInt(1), data: performCreate, operation: safenet.OperationDelegateCall},
+		call{to: f.CreateCall, value: new(big.Int), data: performCreate, operation: safenet.OperationCall},
 	)
 	tx := safenet.SafeTransaction{Safe: safe, To: multiSend141, Data: solabi.Call(multiSendSelector, batch), Operation: safenet.OperationDelegateCall}
 	codeHash := ethrpc.Hash(keccak256.Hash(initCode))
@@ -137,6 +142,12 @@ func TestCreateNonces(t *testing.T) {
 		// The CREATE2 call before it incremented CreateCall's nonce.
 		{Address: create.Address(f.CreateCall, 2), Method: "create", Deployer: f.CreateCall, Nonce: nonce(2), InitCodeHash: codeHash},
 		nil,
+		nil,
+		nil,
+		// The Safe ignores the value of a delegate call.
+		{Address: create.Address(safe, 7), Method: "create", Deployer: safe, Nonce: nonce(7), InitCodeHash: codeHash},
+		// The calls with value before it didn't deploy.
+		{Address: create.Address(f.CreateCall, 3), Method: "create", Deployer: f.CreateCall, Nonce: nonce(3), InitCodeHash: codeHash},
 	}
 	check := func(name string, got *TransactionCalls, want []*Creation) {
 		t.Helper()
@@ -165,7 +176,7 @@ func TestCreateNonces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	check("CallReader without nonces", got, []*Creation{nil, want[1], nil, nil, nil})
+	check("CallReader without nonces", got, []*Creation{nil, want[1], nil, nil, nil, nil, nil, nil, nil})
 }
 
 // TestCreateNonceTransientError checks that a nonce that the node fails to

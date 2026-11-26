@@ -40,9 +40,11 @@ func callsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "it is to.\n\n")
 		fmt.Fprintf(out, "A call to the CreateCall contract of a § 2.1 version has the address of the contract that it would\n")
 		fmt.Fprintf(out, "deploy, derived from its data: with CREATE2, from the deployer, salt, and init code, and with CREATE,\n")
-		fmt.Fprintf(out, "from the deployer's nonce at the Safe block and the deployments of the calls before it. The deployer is\n")
-		fmt.Fprintf(out, "the CreateCall for a call, whose nonce anyone's deployment through it can change before the transaction\n")
-		fmt.Fprintf(out, "is executed, and the Safe for a delegate call.\n\n")
+		fmt.Fprintf(out, "from the deployer's nonce at the Safe block and the deployments of the calls before it, but not those\n")
+		fmt.Fprintf(out, "of the init code that they run. The deployer is the CreateCall for a call, whose nonce anyone's\n")
+		fmt.Fprintf(out, "deployment through it can change before the transaction is executed, and the Safe for a delegate\n")
+		fmt.Fprintf(out, "call. A call that sends value deploys nothing, since CreateCall's functions aren't payable. The\n")
+		fmt.Fprintf(out, "function's value argument is what the deployed contract gets, from the deployer's balance.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
