@@ -1,7 +1,6 @@
 package checks
 
 import (
-	"bytes"
 	"math/big"
 	"slices"
 	"testing"
@@ -68,16 +67,6 @@ func TestExpandTransactionCalls(t *testing.T) {
 		c.data = data
 		return c
 	}
-	// withDataLength sets the data length of the first of packed transactions.
-	withDataLength := func(packed []byte, length *big.Int) []byte {
-		word := solabi.Uint(length)
-		copy(packed[53:85], word[:])
-		return packed
-	}
-	// truncated is a transaction that ends partway through its value, which
-	// MultiSend reads as if it were followed by zeros.
-	truncated := append(append([]byte{0}, bytes.Repeat([]byte{0x11}, 20)...), bytes.Repeat([]byte{0x22}, 19)...)
-	truncatedValue := new(big.Int).SetBytes(append(bytes.Repeat([]byte{0x22}, 19), make([]byte, 13)...))
 
 	tests := []struct {
 		name    string
@@ -91,12 +80,6 @@ func TestExpandTransactionCalls(t *testing.T) {
 		{"no transactions", delegate(multiSend141), []call{emptyMultiSend(multiSend141)}, false},
 		{"empty", emptyMultiSend(multiSend150), []call{emptyMultiSend(multiSend150)}, false},
 		{"nested empty", delegate(multiSend141, delegate(multiSend150)), []call{emptyMultiSend(multiSend141)}, false},
-		{
-			"only ignored trailing bytes",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, make([]byte, 32)),
-			[]call{emptyMultiSend(multiSend141)},
-			false,
-		},
 		{
 			"nested",
 			delegate(multiSend130, library, delegate(multiSend150, transfer, delegate(callOnly150, transfer))),
@@ -126,42 +109,6 @@ func TestExpandTransactionCalls(t *testing.T) {
 		{"zero address since 1.5.0", delegate(multiSend150, selfCall), batched(toSafe), false},
 		{"zero address from MultiSendCallOnly since 1.5.0", delegate(callOnly150, selfCall), batched(toSafe), false},
 		{"zero address before 1.5.0", delegate(multiSend141, selfCall), batched(selfCall), false},
-		{
-			"ignored trailing bytes",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, append(pack(transfer), make([]byte, 32)...)),
-			batched(transfer),
-			false,
-		},
-		{
-			"truncated transaction",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, append(pack(transfer), truncated...)),
-			batched(transfer, call{to: ethrpc.Address(truncated[1:21]), value: truncatedValue, data: ethrpc.Bytes{}, operation: safenet.OperationCall}),
-			false,
-		},
-		{
-			"truncated data",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, pack(library)[:86]),
-			batched(withData(library, ethrpc.Bytes{0x12, 0})),
-			false,
-		},
-		{
-			"largest data length",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, withDataLength(pack(transfer), big.NewInt(maxDataLength))),
-			batched(withData(transfer, make(ethrpc.Bytes, maxDataLength))),
-			false,
-		},
-		{
-			"data length too large",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, withDataLength(pack(transfer), big.NewInt(maxDataLength+1))),
-			nil,
-			true,
-		},
-		{
-			"data length over 64 bits",
-			multiSendTo(multiSend141, safenet.OperationDelegateCall, withDataLength(pack(transfer), maxUint256)),
-			nil,
-			true,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
