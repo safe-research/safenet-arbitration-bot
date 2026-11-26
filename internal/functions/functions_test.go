@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -245,7 +246,7 @@ func TestDecode(t *testing.T) {
 			{multiSend(), `[]`, "multiSend > []"},
 			{
 				multiSend(send),
-				`[{"operation":"CALL","to":"0x7000000000000000000000000000000000000001","value":5,"data":"0x","function":null}]`,
+				`[{"operation":"CALL","to":"0x7000000000000000000000000000000000000001","value":5,"data":"0x","dataLength":0,"function":null}]`,
 				"multiSend > [-]",
 			},
 		} {
@@ -297,6 +298,76 @@ func TestDecode(t *testing.T) {
 			t.Errorf("Decode: got %+v, want execTransaction whose data isn't decoded", f)
 		}
 	})
+}
+
+// cutShort returns the calldata of a multiSend call of one transaction that
+// calls token with data, and whose data length is length, which may run past
+// the end of the batch.
+func cutShort(data []byte, length int) ethrpc.Bytes {
+	head := make([]byte, 85)
+	head[0] = byte(safenet.OperationCall)
+	copy(head[1:21], token[:])
+	word := solabi.Uint64(uint64(length))
+	copy(head[53:], word[:])
+	return solabi.Call(solabi.Selector("multiSend(bytes)"), append(head, data...))
+}
+
+// TestDecodeBatchPadding decodes the last transaction of a batch that runs past
+// its end with the zeros that the contracts read there, such as a transfer
+// whose amount's last zero bytes the batch leaves out, but only up to
+// maxPadding zeros in all for one Decode: 40 batches that each claim
+// MaxDataLength bytes of data take kilobytes, not 40 times 16 MiB, and their
+// transactions aren't decoded.
+func TestDecodeBatchPadding(t *testing.T) {
+	ether := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	amount := new(big.Int).Mul(big.NewInt(1000), ether)
+	transfer := solabi.Call(solabi.Selector("transfer(address,uint256)"), bob, amount)
+	f := Decode(cutShort(transfer[:len(transfer)-2], len(transfer)))
+	if f == nil || len(f.Args[0].Batch) != 1 {
+		t.Fatalf("Decode of a batch cut short: got %v, want a batch of one", f)
+	}
+	if tx := f.Args[0].Batch[0]; len(tx.Data) != len(transfer)-2 || tx.Function == nil || tx.Function.Name != "transfer" ||
+		tx.Function.Args[1].Value.(*big.Int).Cmp(amount) != 0 {
+		t.Errorf("transfer cut short: got %d bytes of data, function %v; want the transfer of %s", len(tx.Data), tx.Function, amount)
+	}
+
+	// The zeros of all of the batches count, so the first transaction that needs
+	// maxPadding of them is decoded, and the second isn't.
+	full := cutShort(transfer, len(transfer)+maxPadding)
+	f = Decode(multiSend(
+		multisend.Transaction{Operation: safenet.OperationCall, To: token, Value: new(big.Int), Data: full},
+		multisend.Transaction{Operation: safenet.OperationCall, To: token, Value: new(big.Int), Data: full},
+	))
+	if f == nil {
+		t.Fatal("Decode of two batches: got nil")
+	}
+	if first, second := f.Args[0].Batch[0].Function.Args[0].Batch[0], f.Args[0].Batch[1].Function.Args[0].Batch[0]; first.Function == nil ||
+		first.Function.Name != "transfer" || second.Function != nil || second.DataLength != uint64(len(transfer)+maxPadding) {
+		t.Errorf("two batches with %d zeros each: got functions %v and %v, want transfer and none", maxPadding, first.Function, second.Function)
+	}
+
+	padded := cutShort(nil, multisend.MaxDataLength)
+	batch := make([]multisend.Transaction, 40)
+	for i := range batch {
+		batch[i] = multisend.Transaction{Operation: safenet.OperationCall, To: token, Value: new(big.Int), Data: padded}
+	}
+	data := multiSend(batch...)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f = Decode(data)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Errorf("Decode of %d bytes allocated %d bytes", len(data), allocated)
+	}
+	if f == nil {
+		t.Fatal("Decode: got nil, want multiSend")
+	}
+	for i, tx := range f.Args[0].Batch {
+		if inner := tx.Function.Args[0].Batch[0]; len(inner.Data) != 0 || inner.DataLength != multisend.MaxDataLength || inner.Function != nil {
+			t.Errorf("transaction %d: got %d bytes of data of %d, function %v; want none of %d, and no function", i, len(inner.Data), inner.DataLength,
+				inner.Function, multisend.MaxDataLength)
+		}
+	}
 }
 
 func TestDecodeMismatches(t *testing.T) {

@@ -154,7 +154,7 @@ func expandMultiSendCall(safe ethrpc.Address, c call) ([]call, bool) {
 		if to == (ethrpc.Address{}) && ms.version == "1.5.0" {
 			to = safe
 		}
-		sub := call{to: to, value: tx.Value, data: tx.Data, operation: tx.Operation, kind: Batched}
+		sub := call{to: to, value: tx.Value, data: tx.FullData(), operation: tx.Operation, kind: Batched}
 		subCalls, reverts := expandMultiSendCall(safe, sub)
 		if reverts {
 			return nil, true

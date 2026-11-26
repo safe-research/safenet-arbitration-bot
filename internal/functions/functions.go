@@ -44,8 +44,8 @@ type Arg struct {
 	Batch []Transaction `json:"batch,omitzero"`
 }
 
-// Transaction is a transaction of a MultiSend batch, with its data decoded as a
-// well-known function, if it is one.
+// Transaction is a transaction of a MultiSend batch, with the data that the
+// contracts call it with decoded as a well-known function, if it is one.
 type Transaction struct {
 	multisend.Transaction
 	Function *Function `json:"function"`
@@ -134,16 +134,37 @@ func init() {
 // maxDepth is how many levels of nested call data Decode decodes.
 const maxDepth = 8
 
+// maxPadding is how many zero bytes Decode adds in all to the data of batch
+// transactions that run past the end of their batch, which the contracts read
+// as zeros. A batch that Safe's tools build has none, and a call that a batch
+// cuts short only misses its last bytes, such as the zero bytes at the end of
+// an amount, while each transaction of a crafted batch can claim up to
+// multisend.MaxDataLength, 16 MiB, of them. 64 KiB is 2,048 words, far more
+// than the 10 words of the longest head of these functions, execTransaction's,
+// and bounds what Decode allocates for zeros to 64 KiB for any call data,
+// rather than 16 MiB for each batch.
+const maxPadding = 64 << 10
+
 // Decode decodes call data as one of the well-known functions, and the data of
 // the calls that it makes as well-known functions, if they are. It returns nil
 // if the data isn't one, or has a well-known selector but arguments that don't
-// fit its ABI layout, or a MultiSend batch that reverts whatever the state.
-// Data after the arguments is ignored, as the Solidity ABI decoder ignores it.
+// fit its ABI layout, or a MultiSend batch that the MultiSend format itself
+// makes revert. Data after the arguments is ignored, as the Solidity ABI
+// decoder ignores it. A decoded batch describes the data only: the contract
+// that runs it can still revert, such as MultiSendCallOnly on a delegate call.
+//
+// The data of a batch transaction that runs past the end of its batch is
+// decoded followed by the zeros that the contracts read, up to maxPadding zero
+// bytes in all, and a transaction whose zeros would go over it is left
+// undecoded.
 func Decode(calldata []byte) *Function {
-	return decode(calldata, 0)
+	padding := maxPadding
+	return decode(calldata, 0, &padding)
 }
 
-func decode(calldata []byte, depth int) *Function {
+// decode decodes calldata as Decode does, at depth, with padding the zero bytes
+// that it can still add to batch transactions.
+func decode(calldata []byte, depth int, padding *int) *Function {
 	if len(calldata) < 4 || depth >= maxDepth {
 		return nil
 	}
@@ -183,7 +204,7 @@ func decode(calldata []byte, depth int) *Function {
 			b := d.Bytes(i)
 			arg.Value = ethrpc.Bytes(b)
 			if p.call && d.Err() == nil && !zeroAddress(args[:i], p.unless) {
-				arg.Call = decode(b, depth+1)
+				arg.Call = decode(b, depth+1, padding)
 			}
 			if p.batch && d.Err() == nil {
 				transactions, ok := multisend.Decode(b)
@@ -192,7 +213,7 @@ func decode(calldata []byte, depth int) *Function {
 				}
 				arg.Batch = []Transaction{}
 				for _, tx := range transactions {
-					arg.Batch = append(arg.Batch, Transaction{tx, decode(tx.Data, depth+1)})
+					arg.Batch = append(arg.Batch, Transaction{tx, decodeTransaction(tx, depth+1, padding)})
 				}
 			}
 		}
@@ -202,6 +223,21 @@ func decode(calldata []byte, depth int) *Function {
 		args[i] = arg
 	}
 	return &Function{Name: def.name, Signature: def.signature, Args: args}
+}
+
+// decodeTransaction decodes the data that the contracts call tx with, its Data
+// followed by zeros up to its DataLength, if those zeros fit in padding, and
+// takes them from it.
+func decodeTransaction(tx multisend.Transaction, depth int, padding *int) *Function {
+	zeros := int(tx.DataLength) - len(tx.Data)
+	if zeros == 0 {
+		return decode(tx.Data, depth, padding)
+	}
+	if zeros > *padding {
+		return nil
+	}
+	*padding -= zeros
+	return decode(tx.FullData(), depth, padding)
 }
 
 // zeroAddress reports whether args has an argument named name that is the zero

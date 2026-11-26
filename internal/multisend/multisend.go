@@ -5,6 +5,7 @@ package multisend
 
 import (
 	"math/big"
+	"slices"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -23,7 +24,19 @@ type Transaction struct {
 	Operation safenet.Operation `json:"operation"`
 	To        ethrpc.Address    `json:"to"`
 	Value     *big.Int          `json:"value"`
-	Data      ethrpc.Bytes      `json:"data"`
+	// Data is the transaction's data that the batch has, and DataLength the length
+	// of the data that the contracts call with. Data is shorter only for a
+	// transaction that runs past the end of the batch.
+	Data       ethrpc.Bytes `json:"data"`
+	DataLength uint64       `json:"dataLength"`
+}
+
+// FullData returns the data that the contracts call with: Data, followed by
+// zeros up to DataLength.
+func (tx Transaction) FullData() ethrpc.Bytes {
+	data := make(ethrpc.Bytes, tx.DataLength)
+	copy(data, tx.Data)
+	return data
 }
 
 // Decode returns the transactions of batch, the argument of multiSend, as the
@@ -35,7 +48,8 @@ type Transaction struct {
 //     bytes.
 //   - They don't check that a transaction fits in the bytes that are left, and
 //     read past their end, where memory is zero. A transaction is therefore
-//     decoded as if its bytes were followed by zeros.
+//     decoded as if its bytes were followed by zeros, which its DataLength
+//     counts and its Data leaves out.
 //   - A transaction with more than MaxDataLength bytes of data needs more memory
 //     than a transaction can pay for, so it reverts.
 //   - An operation other than a call or a delegate call reverts.
@@ -51,22 +65,21 @@ func Decode(batch []byte) ([]Transaction, bool) {
 		if !dataLength.IsUint64() || dataLength.Uint64() > MaxDataLength {
 			return nil, false
 		}
-		data := make(ethrpc.Bytes, dataLength.Uint64())
-		start := offset + len(head)
-		if start < len(batch) {
-			copy(data, batch[start:])
-		}
-		offset = start + len(data)
+		length := int(dataLength.Uint64())
+		start := min(offset+len(head), len(batch))
+		data := slices.Clone(batch[start:min(start+length, len(batch))])
+		offset += len(head) + length
 
 		operation := safenet.Operation(head[0])
 		if operation > safenet.OperationDelegateCall {
 			return nil, false
 		}
 		transactions = append(transactions, Transaction{
-			Operation: operation,
-			To:        ethrpc.Address(head[1:21]),
-			Value:     new(big.Int).SetBytes(head[21:53]),
-			Data:      data,
+			Operation:  operation,
+			To:         ethrpc.Address(head[1:21]),
+			Value:      new(big.Int).SetBytes(head[21:53]),
+			Data:       data,
+			DataLength: uint64(length),
 		})
 	}
 	return transactions, true

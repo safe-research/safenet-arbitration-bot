@@ -14,7 +14,8 @@ import (
 // equal reports whether a and b are the same transactions.
 func equal(a, b []Transaction) bool {
 	return slices.EqualFunc(a, b, func(x, y Transaction) bool {
-		return x.Operation == y.Operation && x.To == y.To && x.Value.Cmp(y.Value) == 0 && bytes.Equal(x.Data, y.Data)
+		return x.Operation == y.Operation && x.To == y.To && x.Value.Cmp(y.Value) == 0 && bytes.Equal(x.Data, y.Data) &&
+			x.DataLength == y.DataLength
 	})
 }
 
@@ -34,8 +35,8 @@ func pack(transactions ...Transaction) []byte {
 }
 
 func TestDecode(t *testing.T) {
-	transfer := Transaction{safenet.OperationCall, ethrpc.Address{19: 0x70}, big.NewInt(1), ethrpc.Bytes{}}
-	library := Transaction{safenet.OperationDelegateCall, ethrpc.Address{19: 0x71}, new(big.Int), ethrpc.Bytes{0x12, 0x34}}
+	transfer := Transaction{safenet.OperationCall, ethrpc.Address{19: 0x70}, big.NewInt(1), ethrpc.Bytes{}, 0}
+	library := Transaction{safenet.OperationDelegateCall, ethrpc.Address{19: 0x71}, new(big.Int), ethrpc.Bytes{0x12, 0x34}, 2}
 	// withDataLength sets the data length of the first of packed transactions.
 	withDataLength := func(packed []byte, length *big.Int) []byte {
 		word := solabi.Uint(length)
@@ -62,19 +63,19 @@ func TestDecode(t *testing.T) {
 		{
 			"truncated transaction",
 			append(pack(transfer), truncated...),
-			[]Transaction{transfer, {safenet.OperationCall, ethrpc.Address(truncated[1:21]), truncatedValue, ethrpc.Bytes{}}},
+			[]Transaction{transfer, {safenet.OperationCall, ethrpc.Address(truncated[1:21]), truncatedValue, ethrpc.Bytes{}, 0}},
 			true,
 		},
 		{
 			"truncated data",
 			pack(library)[:86],
-			[]Transaction{{library.Operation, library.To, library.Value, ethrpc.Bytes{0x12, 0}}},
+			[]Transaction{{library.Operation, library.To, library.Value, ethrpc.Bytes{0x12}, 2}},
 			true,
 		},
 		{
 			"largest data length",
 			withDataLength(pack(transfer), big.NewInt(MaxDataLength)),
-			[]Transaction{{transfer.Operation, transfer.To, transfer.Value, make(ethrpc.Bytes, MaxDataLength)}},
+			[]Transaction{{transfer.Operation, transfer.To, transfer.Value, ethrpc.Bytes{}, MaxDataLength}},
 			true,
 		},
 		{"data length too large", withDataLength(pack(transfer), big.NewInt(MaxDataLength+1)), nil, false},
@@ -89,5 +90,12 @@ func TestDecode(t *testing.T) {
 				t.Errorf("Decode() = %+v, %t; want %+v, %t", got, ok, test.want, test.ok)
 			}
 		})
+	}
+}
+
+func TestFullData(t *testing.T) {
+	tx := Transaction{Data: ethrpc.Bytes{0x12}, DataLength: 3}
+	if got := tx.FullData(); !bytes.Equal(got, []byte{0x12, 0, 0}) {
+		t.Errorf("FullData() = %s, want 0x120000", got)
 	}
 }
