@@ -96,7 +96,9 @@ type Finder struct {
 	Service *txservice.Client
 	// Warn is called with the errors of sources that failed for a reason other than
 	// not having the transaction, such as a service that refuses the request. A
-	// request that gets no answer fails the search instead. It may be nil.
+	// request that gets no answer fails the search instead, except a trace that the
+	// node refuses, a read of the Safe's nonce (see Eth), and the scans that
+	// FindAll warns about. It may be nil.
 	Warn func(error)
 }
 

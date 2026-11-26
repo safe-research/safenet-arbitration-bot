@@ -75,7 +75,7 @@ type historyChain struct {
 	logs []ethrpc.Log
 	// nonce is the Safe's nonce, if set, which the node has from the block
 	// stateFrom on: it answers eth_call at an earlier block as a node does that
-	// doesn't keep the state of old blocks.
+	// doesn't keep the state of old blocks. Any other call fails the test.
 	nonce     *big.Int
 	stateFrom uint64
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
@@ -128,11 +128,16 @@ func (c *historyChain) serve(t *testing.T) string {
 			}
 			res["result"] = logs
 		case "eth_call":
+			var call ethrpc.CallRequest
 			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[0], &call)
 			json.Unmarshal(req.Params[1], &block)
 			switch {
 			case c.nonce == nil:
 				res["error"] = map[string]any{"code": -32601, "message": "method not found"}
+			case call.To != historySafe || string(call.Data) != string(solabi.Call(solabi.Selector("nonce()"))):
+				t.Errorf("eth_call to %s with data %s, want the Safe's nonce()", call.To, call.Data)
+				res["error"] = map[string]any{"code": 3, "message": "execution reverted"}
 			case uint64(block) < c.stateFrom:
 				res["error"] = map[string]any{"code": -32000, "message": "missing trie node 7b2ad5 (path ) state 0x7b2ad5 is not available"}
 			default:
