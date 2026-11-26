@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,10 +23,14 @@ import (
 var hash = ethrpc.Hash{0: 0xaa, 31: 1}
 
 // serve starts a service that answers requests for hash with status and body,
-// and returns a client for it.
+// and has an about page, and returns a client for it.
 func serve(t *testing.T, status int, body string) *Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/tx-service/eth/api/v1/about/" {
+			w.Write([]byte(`{"name": "Safe Transaction Service"}`))
+			return
+		}
 		// The path is versioned, and has a trailing slash like the service wants.
 		if r.URL.Path != "/tx-service/eth/api/v1/multisig-transactions/"+hash.String()+"/" {
 			http.NotFound(w, r)
@@ -126,13 +131,60 @@ func TestTransactionErrors(t *testing.T) {
 	}
 }
 
+func TestTransactionAtWrongURL(t *testing.T) {
+	// Any server answers a wrong URL with 404, so that only says that the service
+	// doesn't have the transaction if the server has the service's about page,
+	// which the client asks for once. Other servers have about pages too, such as
+	// Safe's Config Service, whose page is the last one here.
+	const service = `{"name": "Safe Transaction Service"}`
+	for _, about := range []string{service, "", `{}`, `{"name": "Safe Config Service", "version": "v2.114.1", "apiVersion": "v1", "secure": true}`} {
+		var abouts atomic.Int64
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/about/" {
+				abouts.Add(1)
+				if about != "" {
+					w.Write([]byte(about))
+					return
+				}
+			}
+			http.NotFound(w, r)
+		}))
+		t.Cleanup(server.Close)
+		client := NewClient(server.URL, ethrpc.Mainnet)
+		for range 2 {
+			_, err := client.Transaction(t.Context(), hash)
+			if about == service && !errors.Is(err, ErrNotFound) || about != service && (err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "about page")) {
+				t.Errorf("about page %q: Transaction got error %v", about, err)
+			}
+		}
+		if abouts.Load() != 1 {
+			t.Errorf("about page %q: Transaction asked for the about page %d times, want once", about, abouts.Load())
+		}
+	}
+	// An about page that fails to answer says neither, so the service is
+	// unavailable.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/about/" {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, ethrpc.Mainnet).Transaction(t.Context(), hash); !Unavailable(err) {
+		t.Errorf("about page failing: Transaction got error %v, want the service unavailable", err)
+	}
+}
+
 func TestUnavailable(t *testing.T) {
-	// A rate limit, a server error, or a failure to connect isn't the service's
-	// answer, unlike a refusal, a response that doesn't decode, or not having the
-	// transaction.
+	// A rate limit, a server error, a page that isn't JSON, or a failure to connect
+	// isn't the service's answer, unlike a refusal, JSON that doesn't decode, or
+	// not having the transaction.
 	_, serverError := serve(t, http.StatusInternalServerError, "unavailable").Transaction(t.Context(), hash)
 	_, refusal := serve(t, http.StatusForbidden, "forbidden").Transaction(t.Context(), hash)
-	_, notJSON := serve(t, http.StatusOK, "<html>").Transaction(t.Context(), hash)
+	_, page := serve(t, http.StatusOK, "<html>").Transaction(t.Context(), hash)
+	_, empty := serve(t, http.StatusOK, "").Transaction(t.Context(), hash)
+	_, malformed := serve(t, http.StatusOK, `{"value": "one"}`).Transaction(t.Context(), hash)
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closed.Close()
 	_, refused := NewClient(closed.URL, ethrpc.Mainnet).Transaction(t.Context(), hash)
@@ -144,8 +196,10 @@ func TestUnavailable(t *testing.T) {
 		{"rate limit", &StatusError{Status: "429 Too Many Requests", StatusCode: http.StatusTooManyRequests}, true},
 		{"server error", serverError, true},
 		{"connection refused", refused, true},
+		{"page", page, true},
+		{"empty", empty, true},
 		{"refusal", refusal, false},
-		{"not JSON", notJSON, false},
+		{"malformed", malformed, false},
 		{"not found", ErrNotFound, false},
 		{"nil", nil, false},
 	} {

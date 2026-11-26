@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
+	"github.com/safe-research/safenet-arbitration-bot/internal/httpretry"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
 	"github.com/safe-research/safenet-arbitration-bot/internal/solabi"
 	"github.com/safe-research/safenet-arbitration-bot/internal/txservice"
@@ -50,7 +51,8 @@ type chain struct {
 	empty bool
 	// failing are the methods that the node fails, with their HTTP status, such as
 	// 500 for an overloaded node, 429 for a rate limit, or 403 or 200 for a page
-	// that a proxy sends instead of a JSON-RPC response.
+	// that a proxy sends instead of a JSON-RPC response, or with the method's error
+	// in erring as the body, as some nodes send one.
 	failing map[string]int
 	// resetting are the methods whose responses the node cuts off with a TCP reset,
 	// as an overloaded proxy does.
@@ -93,6 +95,11 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 		}
 		if status, ok := c.failing[req.Method]; ok {
 			w.Header().Set("Retry-After", "0")
+			if rpcErr, ok := c.erring[req.Method]; ok {
+				w.WriteHeader(status)
+				json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": rpcErr})
+				return
+			}
 			http.Error(w, http.StatusText(status), status)
 			return
 		}
@@ -278,11 +285,15 @@ func executionLog(event, safeTxHash, hash ethrpc.Hash, indexed bool, block, inde
 func hash(n byte) ethrpc.Hash { return ethrpc.Hash{0: 0xaa, 31: n} }
 
 // service starts a Safe Transaction Service that has the transactions by Safe
-// transaction hash, and fails requests for those in failing, and returns a
-// client for it.
+// transaction hash and an about page, and fails requests for those in failing,
+// and returns a client for it.
 func service(t *testing.T, transactions map[ethrpc.Hash]*safenet.SafeTransaction, failing ...ethrpc.Hash) *txservice.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/about/" {
+			json.NewEncoder(w).Encode(map[string]any{"name": "Safe Transaction Service"})
+			return
+		}
 		id, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/")
 		h, err := ethrpc.ParseHash(strings.TrimSuffix(id, "/"))
 		tx := transactions[h]
@@ -457,9 +468,10 @@ func TestFindWithNonceBeforeTheSearch(t *testing.T) {
 }
 
 func TestFindServiceFailure(t *testing.T) {
-	// A service that fails, rate limits, or can't be reached says nothing about the
-	// transaction, so Find fails rather than report it as unknown, with an error
-	// that doesn't have the service's response as is.
+	// A service that fails, rate limits, answers with a page that isn't JSON, or
+	// can't be reached says nothing about the transaction, so Find fails rather
+	// than report it as unknown, with an error that doesn't have the service's
+	// response as is.
 	tx := transaction("service", 1)
 	c := &chain{logs: []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)}}
 	closed := httptest.NewServer(http.NotFoundHandler())
@@ -467,6 +479,7 @@ func TestFindServiceFailure(t *testing.T) {
 	for name, s := range map[string]*txservice.Client{
 		"500":                service(t, nil, tx.Hash()),
 		"429":                statusService(t, http.StatusTooManyRequests),
+		"200 page":           statusService(t, http.StatusOK),
 		"connection refused": txservice.NewClient(closed.URL, ethrpc.Mainnet),
 	} {
 		got, err := (&Finder{Eth: c.serve(t), Service: s}).Find(t.Context(), safe, 0, 200)
@@ -475,14 +488,17 @@ func TestFindServiceFailure(t *testing.T) {
 		}
 	}
 
-	// A service that refuses the request answers it, so the transaction is unknown,
-	// with a warning.
-	f := &Finder{Eth: c.serve(t), Service: statusService(t, http.StatusForbidden)}
-	var warnings []error
-	f.Warn = func(err error) { warnings = append(warnings, err) }
-	got, err := f.Find(t.Context(), safe, 0, 200)
-	if err != nil || len(got) != 1 || got[0].Transaction != nil || !slices.ContainsFunc(warnings, func(w error) bool { return strings.Contains(w.Error(), "403") }) {
-		t.Errorf("Find: got %+v, %v, warnings %v; want an unknown transaction with a warning with the HTTP status", got, err, warnings)
+	// A service that refuses the request answers it, and so does a server at a
+	// wrong URL, which doesn't have the service's about page, so the transaction is
+	// unknown, with a warning.
+	for status, want := range map[int]string{http.StatusForbidden: "403", http.StatusNotFound: "about page"} {
+		f := &Finder{Eth: c.serve(t), Service: statusService(t, status)}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.Find(t.Context(), safe, 0, 200)
+		if err != nil || len(got) != 1 || got[0].Transaction != nil || !slices.ContainsFunc(warnings, func(w error) bool { return strings.Contains(w.Error(), want) }) {
+			t.Errorf("HTTP %d: Find got %+v, %v, warnings %v; want an unknown transaction with a warning containing %q", status, got, err, warnings, want)
+		}
 	}
 }
 
@@ -642,59 +658,135 @@ func TestFindNonceTimeout(t *testing.T) {
 	}
 }
 
+// relayedChain returns a fake node with two executions of the Safe, at the
+// nonces 0 and 1, by a relayer in two transactions, which only a trace has.
+func relayedChain(first, second *safenet.SafeTransaction) *chain {
+	return &chain{
+		nonce: big.NewInt(2),
+		txs: map[ethrpc.Hash]ethrpc.Transaction{
+			hash(1): {Hash: hash(1), To: &relayer, Input: execCall(first)}, hash(2): {Hash: hash(2), To: &relayer, Input: execCall(second)},
+		},
+		logs: []ethrpc.Log{
+			executionLog(executionSuccessEvent, first.Hash(), hash(1), true, 100, 0),
+			executionLog(executionSuccessEvent, second.Hash(), hash(2), true, 110, 0),
+		},
+	}
+}
+
 func TestFindTraceRefused(t *testing.T) {
-	// Some nodes refuse debug_traceTransaction with an HTTP error status, such as
-	// 401, 406 or 503, which leaves the transaction unknown with a warning rather
-	// than failing.
-	tx := transaction("relayed", 1)
-	for _, status := range []int{http.StatusUnauthorized, http.StatusNotAcceptable, http.StatusServiceUnavailable} {
-		c := &chain{
-			logs:    []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
-			nonce:   big.NewInt(2),
-			txs:     map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
-			failing: map[string]int{"debug_traceTransaction": status},
+	// Some nodes refuse debug_traceTransaction with an HTTP error status, such as a
+	// 401 or 406 page, which leaves the transactions unknown with one warning
+	// rather than failing, and others don't serve the method, without a warning.
+	// Either would answer every trace the same way, so only one is asked for.
+	first, second := transaction("relayed", 0), transaction("relayed again", 1)
+	for _, status := range []int{http.StatusUnauthorized, http.StatusNotAcceptable, 0} {
+		c := relayedChain(first, second)
+		warns, traces := 1, int64(1)
+		if status == 0 {
+			warns = 0
+		} else {
+			c.failing = map[string]int{"debug_traceTransaction": status}
 		}
 		f := &Finder{Eth: c.serve(t)}
 		var warnings []error
 		f.Warn = func(err error) { warnings = append(warnings, err) }
 		got, err := f.Find(t.Context(), safe, 0, 200)
-		if err != nil || len(got) != 1 || got[0].Transaction != nil || len(warnings) != 1 {
-			t.Errorf("HTTP %d: Find got %+v, %v, warnings %v; want an unknown transaction with one warning", status, got, err, warnings)
+		if err != nil || len(got) != 2 || got[0].Transaction != nil || got[1].Transaction != nil || len(warnings) != warns || c.traced.Load() != traces {
+			t.Errorf("HTTP %d: Find got %+v, %v, warnings %v after %d trace requests; want two unknown transactions with %d warnings after %d",
+				status, got, err, warnings, c.traced.Load(), warns, traces)
+		}
+	}
+	// Some nodes answer a method that they don't allow with "Invalid Request".
+	c := relayedChain(first, second)
+	c.erring = map[string]ethrpc.Error{"debug_traceTransaction": {Code: -32600, Message: "Method debug_traceTransaction not allowed"}}
+	f := &Finder{Eth: c.serve(t), Warn: func(err error) { t.Errorf("Find: unexpected warning %v", err) }}
+	if got, err := f.Find(t.Context(), safe, 0, 200); err != nil || len(got) != 2 || got[0].Transaction != nil || got[1].Transaction != nil || c.traced.Load() != 1 {
+		t.Errorf("Invalid Request: Find got %+v, %v after %d trace requests; want two unknown transactions after 1", got, err, c.traced.Load())
+	}
+}
+
+func TestFindTraceServerError(t *testing.T) {
+	// A server error, such as a 503 from a gateway whose node is briefly down, may
+	// only be about that trace, even with a JSON-RPC error in its body, and so may
+	// a 408 for a trace that took too long, so each trace warns, and the next one
+	// is asked for too. httpretry sends a 503 again, but not a 408.
+	first, second := transaction("relayed", 0), transaction("relayed again", 1)
+	for _, tc := range []struct {
+		status int
+		rpcErr *ethrpc.Error
+		traces int64
+	}{
+		{http.StatusServiceUnavailable, nil, 2 * (1 + httpretry.DefaultRetries)},
+		{http.StatusServiceUnavailable, &ethrpc.Error{Code: -32601, Message: "method not found"}, 2 * (1 + httpretry.DefaultRetries)},
+		{http.StatusRequestTimeout, nil, 2},
+	} {
+		c := relayedChain(first, second)
+		c.failing = map[string]int{"debug_traceTransaction": tc.status}
+		if tc.rpcErr != nil {
+			c.erring = map[string]ethrpc.Error{"debug_traceTransaction": *tc.rpcErr}
+		}
+		f := &Finder{Eth: c.serve(t)}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.Find(t.Context(), safe, 0, 200)
+		if err != nil || len(got) != 2 || got[0].Transaction != nil || got[1].Transaction != nil || len(warnings) != 2 || c.traced.Load() != tc.traces {
+			t.Errorf("HTTP %d with %v: Find got %+v, %v, warnings %v after %d trace requests; want two unknown transactions with 2 warnings after %d",
+				tc.status, tc.rpcErr, got, err, warnings, c.traced.Load(), tc.traces)
 		}
 	}
 }
 
 func TestFindTraceRateLimit(t *testing.T) {
 	// A node that rate limits traces may serve them, so Find fails rather than
-	// report an unknown transaction.
+	// report an unknown transaction, whatever JSON-RPC error the response has.
 	tx := transaction("relayed", 1)
-	c := &chain{
-		logs:    []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
-		nonce:   big.NewInt(2),
-		txs:     map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
-		failing: map[string]int{"debug_traceTransaction": http.StatusTooManyRequests},
-	}
-	if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); !ethrpc.Transient(err) {
-		t.Errorf("Find: got %+v, %v; want a transient error", got, err)
+	for _, rpcErr := range []*ethrpc.Error{nil, {Code: -32601, Message: "method not found"}, {Code: -32600, Message: "rate limited"}, &nodeTimeout} {
+		c := &chain{
+			logs:    []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
+			nonce:   big.NewInt(2),
+			txs:     map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
+			failing: map[string]int{"debug_traceTransaction": http.StatusTooManyRequests},
+		}
+		if rpcErr != nil {
+			c.erring = map[string]ethrpc.Error{"debug_traceTransaction": *rpcErr}
+		}
+		if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); !ethrpc.Transient(err) {
+			t.Errorf("HTTP 429 with %v: Find got %+v, %v; want a transient error", rpcErr, got, err)
+		}
 	}
 }
 
-func TestFindTraceTimeout(t *testing.T) {
-	// A trace that times out is the node's answer, as one that it doesn't serve is,
-	// so the transaction comes from the service.
+func TestFindTraceNull(t *testing.T) {
+	// A null trace isn't one, so Find fails rather than read it as a trace without
+	// calls to the Safe.
 	tx := transaction("relayed", 1)
 	c := &chain{
 		logs:   []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
 		nonce:  big.NewInt(2),
 		txs:    map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
-		erring: map[string]ethrpc.Error{"debug_traceTransaction": nodeTimeout},
+		traces: map[ethrpc.Hash]any{hash(1): nil},
 	}
-	f := &Finder{Eth: c.serve(t), Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{tx.Hash(): tx})}
-	var warnings []error
-	f.Warn = func(err error) { warnings = append(warnings, err) }
-	got, err := f.Find(t.Context(), safe, 0, 200)
-	if err != nil || len(got) != 1 || got[0].Source != SourceService || len(warnings) != 0 {
-		t.Errorf("Find: got %+v, %v, warnings %v; want the transaction from the service", got, err, warnings)
+	if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); err == nil || !strings.Contains(err.Error(), "null result") {
+		t.Errorf("Find: got %+v, %v; want an error about the null result", got, err)
+	}
+}
+
+func TestFindTraceError(t *testing.T) {
+	// A trace that times out, or of a block whose state the node doesn't keep, is
+	// the node's answer about that transaction, so the transactions come from the
+	// service, with a warning for each trace.
+	first, second := transaction("relayed", 0), transaction("relayed again", 1)
+	for _, rpcErr := range []ethrpc.Error{nodeTimeout, missingState} {
+		c := relayedChain(first, second)
+		c.erring = map[string]ethrpc.Error{"debug_traceTransaction": rpcErr}
+		f := &Finder{Eth: c.serve(t), Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{first.Hash(): first, second.Hash(): second})}
+		var warnings []error
+		f.Warn = func(err error) { warnings = append(warnings, err) }
+		got, err := f.Find(t.Context(), safe, 0, 200)
+		if err != nil || len(got) != 2 || got[0].Source != SourceService || got[1].Source != SourceService || len(warnings) != 2 || c.traced.Load() != 2 {
+			t.Errorf("%v: Find got %+v, %v, warnings %v after %d traces; want the transactions from the service, with a warning for each of 2 traces",
+				&rpcErr, got, err, warnings, c.traced.Load())
+		}
 	}
 }
 

@@ -33,7 +33,8 @@ func listed(tx *safenet.SafeTransaction, hash ethrpc.Hash, block uint64) listing
 // historyService starts a Safe Transaction Service that knows the Safe and
 // lists its executions, as the service lists them, or fails to if listings is
 // nil, and returns a client for it. It says that the transaction with the hash
-// creation created the Safe, if given. It has no transactions by hash.
+// creation created the Safe, if given. It has no transactions by hash, but an
+// about page.
 func historyService(t *testing.T, listings []listing, creation ...ethrpc.Hash) *txservice.Client {
 	t.Helper()
 	return historyServiceWith(t, listings, nil, creation...)
@@ -44,6 +45,10 @@ func historyService(t *testing.T, listings []listing, creation ...ethrpc.Hash) *
 func historyServiceWith(t *testing.T, listings []listing, transactions map[ethrpc.Hash]*safenet.SafeTransaction, creation ...ethrpc.Hash) *txservice.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/about/" {
+			json.NewEncoder(w).Encode(map[string]any{"name": "Safe Transaction Service"})
+			return
+		}
 		if id, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/"); ok {
 			h, err := ethrpc.ParseHash(strings.TrimSuffix(id, "/"))
 			if tx := transactions[h]; tx != nil && err == nil {

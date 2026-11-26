@@ -92,25 +92,42 @@ func (c *Client) ChainID() uint64 {
 // Call executes a message call against the state at the given block without
 // creating a transaction (eth_call), and returns the call's return data.
 func (c *Client) Call(ctx context.Context, call CallRequest, block BlockNumber) (Bytes, error) {
-	var result Bytes
-	err := c.RawRequest(ctx, &result, "eth_call", call, block)
-	return result, err
+	var result *Bytes
+	if err := c.RawRequest(ctx, &result, "eth_call", call, block); err != nil {
+		return nil, err
+	}
+	// A null result isn't empty return data.
+	if result == nil {
+		return nil, fmt.Errorf("eth_call: null result for a call to %s", call.To)
+	}
+	return *result, nil
 }
 
 // BlockNumber returns the number of the node's most recent block
 // (eth_blockNumber).
 func (c *Client) BlockNumber(ctx context.Context) (BlockNumber, error) {
-	var result BlockNumber
-	err := c.RawRequest(ctx, &result, "eth_blockNumber")
-	return result, err
+	var result *BlockNumber
+	if err := c.RawRequest(ctx, &result, "eth_blockNumber"); err != nil {
+		return 0, err
+	}
+	if result == nil {
+		return 0, errors.New("eth_blockNumber: null result")
+	}
+	return *result, nil
 }
 
 // GetCode returns the code of the contract at address as of block
 // (eth_getCode).
 func (c *Client) GetCode(ctx context.Context, address Address, block BlockNumber) (Bytes, error) {
-	var result Bytes
-	err := c.RawRequest(ctx, &result, "eth_getCode", address, block)
-	return result, err
+	var result *Bytes
+	if err := c.RawRequest(ctx, &result, "eth_getCode", address, block); err != nil {
+		return nil, err
+	}
+	// A null result isn't an account without code.
+	if result == nil {
+		return nil, fmt.Errorf("eth_getCode: null result for %s", address)
+	}
+	return *result, nil
 }
 
 // GetBalance returns the balance of address, in wei, as of block
@@ -145,17 +162,33 @@ func (c *Client) GetTransactionCount(ctx context.Context, address Address, block
 // GetStorageAt returns the value of the storage slot of the contract at address
 // as of block (eth_getStorageAt).
 func (c *Client) GetStorageAt(ctx context.Context, address Address, slot Hash, block BlockNumber) (Hash, error) {
-	var result Hash
-	err := c.RawRequest(ctx, &result, "eth_getStorageAt", address, slot, block)
-	return result, err
+	var result *Hash
+	if err := c.RawRequest(ctx, &result, "eth_getStorageAt", address, slot, block); err != nil {
+		return Hash{}, err
+	}
+	if result == nil {
+		return Hash{}, fmt.Errorf("eth_getStorageAt: null result for %s", address)
+	}
+	return *result, nil
 }
 
 // GetLogs returns the logs matching filter (eth_getLogs). Nodes commonly limit
 // the block range of a single request, see ScanLogs for querying wider ranges.
 func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
-	var result []Log
-	err := c.RawRequest(ctx, &result, "eth_getLogs", filter)
-	return result, err
+	return c.getLogs(ctx, rateLimited, filter)
+}
+
+// getLogs is GetLogs, retrying the JSON-RPC errors that retryable reports.
+func (c *Client) getLogs(ctx context.Context, retryable func(error) bool, filter LogFilter) ([]Log, error) {
+	var result *[]Log
+	if err := c.retrying(ctx, retryable, &result, "eth_getLogs", filter); err != nil {
+		return nil, err
+	}
+	// A null result isn't a range without logs.
+	if result == nil {
+		return nil, fmt.Errorf("eth_getLogs: null result for blocks %d to %d", filter.FromBlock, filter.ToBlock)
+	}
+	return *result, nil
 }
 
 // ErrNotFound is the error for a transaction that the node doesn't have. A node
@@ -243,7 +276,8 @@ func (e *HTTPError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("HTTP %s: %v", e.Status, e.Err)
 	}
-	return fmt.Sprintf("HTTP %s: %s", e.Status, e.Body)
+	// The body is quoted, since it isn't trusted.
+	return fmt.Sprintf("HTTP %s: %q", e.Status, e.Body)
 }
 
 func (e *HTTPError) Unwrap() error {
@@ -432,7 +466,10 @@ func (c *Client) request(ctx context.Context, result any, method string, params 
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return fmt.Errorf("%s: decoding response: %w", method, invalidResponse{err})
 	}
-	if res.ID != id {
+	// A node may answer a request that it rejects with an error and a null ID,
+	// which decodes as 0, the ID of no request. Each request has its own HTTP
+	// request, so the error is the answer to this one.
+	if res.ID != id && (res.ID != 0 || res.Error == nil) {
 		return fmt.Errorf("%s: %w", method, invalidResponse{fmt.Errorf("response ID %d does not match request ID %d", res.ID, id)})
 	}
 	if res.Error != nil {
