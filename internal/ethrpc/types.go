@@ -170,8 +170,8 @@ type CallRequest struct {
 	Value *BigQuantity `json:"value,omitempty"`
 }
 
-// BigQuantity is an integer of any size, encoded as a JSON-RPC quantity, such
-// as "0x1a".
+// BigQuantity is an integer of up to 256 bits, the size of an EVM word, encoded
+// as a JSON-RPC quantity, such as "0x1a". A longer quantity doesn't decode.
 type BigQuantity big.Int
 
 func (q *BigQuantity) MarshalText() ([]byte, error) {
@@ -180,7 +180,7 @@ func (q *BigQuantity) MarshalText() ([]byte, error) {
 
 func (q *BigQuantity) UnmarshalText(text []byte) error {
 	digits, ok := strings.CutPrefix(string(text), "0x")
-	if !ok || digits == "" || strings.ContainsAny(digits, "+-") {
+	if !ok || digits == "" || len(digits) > 64 || strings.ContainsAny(digits, "+-") {
 		return fmt.Errorf("invalid quantity %q", text)
 	}
 	if _, ok := (*big.Int)(q).SetString(digits, 16); !ok {
@@ -251,6 +251,44 @@ type Block struct {
 // Time returns the block's timestamp as a time in UTC.
 func (b Block) Time() time.Time {
 	return time.Unix(int64(b.Timestamp), 0).UTC()
+}
+
+// CallFrame is a call in the output of geth's callTracer, which
+// debug_traceTransaction and debug_traceCall return with
+// {"tracer": "callTracer"}, with the calls that it makes, in order.
+type CallFrame struct {
+	// Type is the call's opcode, such as CALL, DELEGATECALL, STATICCALL, CREATE, or
+	// CREATE2.
+	Type string  `json:"type"`
+	From Address `json:"from"`
+	// To is the account called, or created, which may be absent or zero for a
+	// creation that failed.
+	To *Address `json:"to"`
+	// Value is the native currency that the call sends, and for a DELEGATECALL,
+	// that of the call that it runs in. Nodes leave it out for a STATICCALL, which
+	// sends none.
+	Value *BigQuantity `json:"value"`
+	Input Bytes        `json:"input"`
+	// Error is the node's error of a call that failed, such as "execution
+	// reverted", and RevertReason the message that it reverted with, if any.
+	Error        string      `json:"error"`
+	RevertReason string      `json:"revertReason"`
+	Calls        []CallFrame `json:"calls"`
+}
+
+// Check returns an error if f, or a call that it makes, has no type, as JSON
+// that isn't a trace of the callTracer has, such as {} or the opcode trace of
+// the default tracer, which would otherwise decode as a call that makes none.
+func (f *CallFrame) Check() error {
+	if f.Type == "" {
+		return errors.New("not a callTracer trace: a call has no type")
+	}
+	for i := range f.Calls {
+		if err := f.Calls[i].Check(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Error is an error returned by the JSON-RPC server.

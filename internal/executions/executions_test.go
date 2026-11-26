@@ -776,17 +776,23 @@ func TestFindTraceRateLimit(t *testing.T) {
 }
 
 func TestFindTraceNull(t *testing.T) {
-	// A null trace isn't one, so Find fails rather than read it as a trace without
-	// calls to the Safe.
+	// A null trace isn't one, nor is a result that isn't a callTracer trace, such
+	// as {} or the default tracer's opcode trace, so Find fails rather than read it
+	// as a trace without calls to the Safe.
 	tx := transaction("relayed", 1)
-	c := &chain{
-		logs:   []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
-		nonce:  big.NewInt(2),
-		txs:    map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
-		traces: map[ethrpc.Hash]any{hash(1): nil},
-	}
-	if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); err == nil || !strings.Contains(err.Error(), "null result") {
-		t.Errorf("Find: got %+v, %v; want an error about the null result", got, err)
+	for _, test := range []struct{ trace, want string }{
+		{`null`, "null result"},
+		{`{"gas": 21000, "failed": false, "returnValue": "", "structLogs": []}`, "not a callTracer trace"},
+	} {
+		c := &chain{
+			logs:   []ethrpc.Log{executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 0)},
+			nonce:  big.NewInt(2),
+			txs:    map[ethrpc.Hash]ethrpc.Transaction{hash(1): {Hash: hash(1), To: &relayer, Input: execCall(tx)}},
+			traces: map[ethrpc.Hash]any{hash(1): json.RawMessage(test.trace)},
+		}
+		if got, err := (&Finder{Eth: c.serve(t)}).Find(t.Context(), safe, 0, 200); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("Find with the trace %s: got %+v, %v; want an error about the %s", test.trace, got, err, test.want)
+		}
 	}
 }
 

@@ -30,6 +30,15 @@ type simulateOutput struct {
 			} `json:"args"`
 		} `json:"error"`
 	} `json:"result"`
+	Trace *struct {
+		Available bool `json:"available"`
+		Calls     []struct {
+			Depth int             `json:"depth"`
+			Type  string          `json:"type"`
+			To    *ethrpc.Address `json:"to"`
+			Error string          `json:"error"`
+		} `json:"calls"`
+	} `json:"trace"`
 }
 
 // TestSimulate runs `arbot simulate` against a real Safe 1.3.0 on anvil, on two
@@ -69,8 +78,9 @@ func TestSimulate(t *testing.T) {
 
 	got := decode[simulateOutput](t, arbot.Run(t, "simulate", "-json", "-request-file", path))
 	if got.ChainID != ethrpc.Mainnet || got.Safe != tx.Safe || got.SafeBlock == 0 || got.Result.Method != "eth_call" ||
-		got.Result.Status != "reverted" || got.Result.RevertReason == "" || len(got.Result.ReturnData) != 0 || got.Result.Error != nil {
-		t.Errorf("simulate: got %+v, want a call that reverted without data", got)
+		got.Result.Status != "reverted" || got.Result.RevertReason == "" || len(got.Result.ReturnData) != 0 || got.Result.Error != nil ||
+		got.Trace != nil {
+		t.Errorf("simulate: got %+v, want a call that reverted without data, and no trace", got)
 	}
 	text := arbot.Run(t, "simulate", "-request-file", path)
 	for _, want := range []string{`(?m)^Result +reverted$`, `(?m)^  Method +eth_call from the Safe$`} {
@@ -86,10 +96,10 @@ func TestSimulate(t *testing.T) {
 	}
 }
 
-// TestSimulateBatch runs `arbot simulate` against a real Safe 1.3.0 on anvil,
-// on two MultiSendCallOnly batches of calls that the Safe makes to itself: one
-// that adds two owners, which succeeds, and one that adds the same owner twice,
-// whose second call reverts only because the first one ran.
+// TestSimulateBatch runs `arbot simulate -trace` against a real Safe 1.3.0 on
+// anvil, on two MultiSendCallOnly batches of calls that the Safe makes to
+// itself: one that adds two owners, which succeeds, and one that adds the same
+// owner twice, whose second call reverts only because the first one ran.
 func TestSimulateBatch(t *testing.T) {
 	t.Parallel()
 	n := e2e.NewTestnet(t)
@@ -135,14 +145,41 @@ func TestSimulateBatch(t *testing.T) {
 		if err := os.WriteFile(path, arbot.Run(t, "info", "-json", r.ID.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		return decode[simulateOutput](t, arbot.Run(t, "simulate", "-json", "-request-file", path))
+		if text := arbot.Run(t, "simulate", "-trace", "-request-file", path); !regexp.MustCompile(`(?m)^Trace \(debug_traceCall, callTracer\)$`).Match(text) {
+			t.Errorf("simulate -trace: output has no trace:\n%s", text)
+		}
+		return decode[simulateOutput](t, arbot.Run(t, "simulate", "-trace", "-json", "-request-file", path))
 	}
 
-	if got := run(succeeds); got.Result.Method != "simulateAndRevert" || got.Result.Status != "success" || len(got.Result.ReturnData) != 0 {
+	got := run(succeeds)
+	if got.Result.Method != "simulateAndRevert" || got.Result.Status != "success" || len(got.Result.ReturnData) != 0 {
 		t.Errorf("simulate of the batch that succeeds: got %+v", got.Result)
 	}
-	// MultiSendCallOnly 1.3.0 reverts with no data when a call of its batch does.
-	if got := run(reverts); got.Result.Status != "reverted" || len(got.Result.ReturnData) != 0 || got.Result.Error != nil {
+	// The trace's top frame is the call of simulateAndRevert, which reverts by
+	// design, then the Safe's delegate calls to its singleton and the MultiSend,
+	// which make the two calls to the Safe, which delegate calls to its singleton
+	// in turn.
+	if tr := got.Trace; tr == nil || !tr.Available || len(tr.Calls) < 5 || tr.Calls[0].Error == "" || tr.Calls[2].Type != "DELEGATECALL" ||
+		tr.Calls[2].To == nil || *tr.Calls[2].To != multiSendCallOnly130 {
+		t.Errorf("simulate -trace of the batch that succeeds: got trace %+v", tr)
+	}
+
+	// MultiSendCallOnly 1.3.0 reverts with no data when a call of its batch does,
+	// and the trace shows which: of the batch's calls to the Safe, the frames at
+	// depth 3, the second one reverts, since the owner is already one.
+	got = run(reverts)
+	if got.Result.Status != "reverted" || len(got.Result.ReturnData) != 0 || got.Result.Error != nil {
 		t.Errorf("simulate of the batch that reverts: got %+v, want a revert without data", got.Result)
+	}
+	var batched []string
+	if got.Trace != nil {
+		for _, c := range got.Trace.Calls {
+			if c.Depth == 3 {
+				batched = append(batched, c.Error)
+			}
+		}
+	}
+	if len(batched) != 2 || batched[0] != "" || batched[1] == "" {
+		t.Errorf("simulate -trace of the batch that reverts: got the errors %q of the batched calls, want only the second to fail", batched)
 	}
 }

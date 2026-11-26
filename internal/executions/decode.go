@@ -262,7 +262,7 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 	e := d.executions[i]
 	txs, ok := d.traces[e.TxHash]
 	if !ok && !d.untraced {
-		var root *callFrame
+		var root *ethrpc.CallFrame
 		// Most public nodes don't serve traces, so the next source may have the
 		// transaction. A node that says that it doesn't serve the method, or refuses it
 		// with an HTTP error status rather than a JSON-RPC error, such as a 401 or 406
@@ -271,7 +271,7 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 		// Timeout, which may be brief, or for a trace that timed out or of a block
 		// whose state the node doesn't keep, is a warning about this transaction only.
 		// A rate limit or a dropped connection is a failure, though, since the node may
-		// serve traces, and so is a null result, which isn't a trace.
+		// serve traces, and so is a result that isn't a callTracer trace, such as null.
 		err := d.Eth.RawRequest(ctx, &root, "debug_traceTransaction", e.TxHash, map[string]any{"tracer": "callTracer"})
 		// An HTTP rate limit is one whatever JSON-RPC error its body has.
 		httpErr, refused := errors.AsType[*ethrpc.HTTPError](err)
@@ -282,7 +282,11 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 			d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: null result", e.TxHash))
 			return nil
 		case err == nil:
-			txs = d.byHash(i, root.callsTo(d.safe, nil), nonces)
+			if err := root.Check(); err != nil {
+				d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: %w", e.TxHash, err))
+				return nil
+			}
+			txs = d.byHash(i, callsTo(root, d.safe, nil), nonces)
 		case unserved(err):
 			d.untraced = true
 		case refused && httpErr.StatusCode < http.StatusInternalServerError && httpErr.StatusCode != http.StatusRequestTimeout:
@@ -361,19 +365,10 @@ func (f *Finder) warn(err error) {
 	}
 }
 
-// callFrame is a call in the output of geth's callTracer.
-type callFrame struct {
-	Type  string          `json:"type"`
-	To    *ethrpc.Address `json:"to"`
-	Input ethrpc.Bytes    `json:"input"`
-	Error string          `json:"error"`
-	Calls []callFrame     `json:"calls"`
-}
-
 // callsTo appends to inputs the calldata of the calls to safe in the frame and
 // the calls it makes, in the order that they start. A call that reverted, and
 // the calls in it, are left out, since their effects were undone.
-func (f *callFrame) callsTo(safe ethrpc.Address, inputs []ethrpc.Bytes) []ethrpc.Bytes {
+func callsTo(f *ethrpc.CallFrame, safe ethrpc.Address, inputs []ethrpc.Bytes) []ethrpc.Bytes {
 	if f.Error != "" {
 		return inputs
 	}
@@ -381,7 +376,7 @@ func (f *callFrame) callsTo(safe ethrpc.Address, inputs []ethrpc.Bytes) []ethrpc
 		inputs = append(inputs, f.Input)
 	}
 	for i := range f.Calls {
-		inputs = f.Calls[i].callsTo(safe, inputs)
+		inputs = callsTo(&f.Calls[i], safe, inputs)
 	}
 	return inputs
 }
