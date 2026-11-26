@@ -35,6 +35,9 @@ type decoder struct {
 	// that got no answer.
 	nexts     map[uint64]*big.Int
 	nonceErrs map[uint64]error
+	// nonceLists are the nonces that the executions of each block may have used, by
+	// block (see nonces).
+	nonceLists map[uint64]nonceList
 	// calldata and traces are the Safe transactions that the calldata and a trace
 	// of an onchain transaction have, by hash (see byHash).
 	calldata map[ethrpc.Hash]map[ethrpc.Hash]*safenet.SafeTransaction
@@ -135,32 +138,54 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 // executions[i] is the one that its position gives, which comes first, then
 // those above it and those below. But an execution nested in another logs
 // before it, so executions[i] may have used any of the nonces of its block's
-// executions, and the hash check proves which.
+// executions, and the hash check proves which. The nonces are worked out once
+// for each block, and those of its executions are windows of one list.
 func (d *decoder) nonces(ctx context.Context, i int) ([]*big.Int, error) {
 	block := d.executions[i].Block
-	first, last := d.block(i)
-	at, after := uint64(d.to), len(d.executions)-last-1
-	if d.byBlock {
-		at, after = block, 0
-	}
-	next, err := d.nonceAt(ctx, at)
-	if next == nil {
-		return nil, err
-	}
-	// The block's executions used as many nonces just below top as there are of
-	// them, and the position of executions[i] gives the one last-i+1 below it.
-	top := new(big.Int).Sub(next, big.NewInt(int64(after)))
-	var nonces []*big.Int
-	for j := 0; j <= last-first; j++ {
-		below := last - i + 1 - j
-		if below < 1 {
-			below += last - first + 1
+	list, ok := d.nonceLists[block]
+	if !ok {
+		first, last := d.block(i)
+		at, after := uint64(d.to), len(d.executions)-last-1
+		if d.byBlock {
+			at, after = block, 0
 		}
-		if nonce := new(big.Int).Sub(top, big.NewInt(int64(below))); nonce.Sign() >= 0 {
-			nonces = append(nonces, nonce)
+		next, err := d.nonceAt(ctx, at)
+		list.first, list.err = first, err
+		if next != nil {
+			// The block's executions used as many nonces just below top as there are of
+			// them, and the position of executions[first] gives the lowest.
+			top := new(big.Int).Sub(next, big.NewInt(int64(after)))
+			for below := last - first + 1; below > 0; below-- {
+				if nonce := new(big.Int).Sub(top, big.NewInt(int64(below))); nonce.Sign() >= 0 {
+					list.nonces = append(list.nonces, nonce)
+				} else {
+					list.first++
+				}
+			}
+			list.nonces = append(list.nonces, list.nonces...)
 		}
+		if d.nonceLists == nil {
+			d.nonceLists = make(map[uint64]nonceList)
+		}
+		d.nonceLists[block] = list
 	}
-	return nonces, nil
+	n := len(list.nonces) / 2
+	if n == 0 {
+		return nil, list.err
+	}
+	start := max(0, i-list.first)
+	return list.nonces[start : start+n], nil
+}
+
+// nonceList is the nonces that the executions of a block may have used, in the
+// order that their positions give them, twice, so that those from any position
+// on, followed by those before it, are a window of it. first is the index of
+// the execution whose position gives the first of them, and err the error of
+// the read of the Safe's nonce if it got no answer.
+type nonceList struct {
+	nonces []*big.Int
+	first  int
+	err    error
 }
 
 // block returns the indexes of the first and last executions in the block of
@@ -284,7 +309,8 @@ func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safe
 // of them. A Safe transaction takes its nonce when its execution starts, so the
 // calls, in the order that they start, use consecutive nonces, the first of
 // them usually the first of nonces: each call tries the nonce after the last
-// match first, and stops at its match.
+// match first, and stops at its match. Calls with the same calldata may have
+// used other nonces, so a call skips the hashes that earlier calls matched.
 func (d *decoder) byHash(i int, inputs []ethrpc.Bytes, nonces []*big.Int) map[ethrpc.Hash]*safenet.SafeTransaction {
 	logged := make(map[ethrpc.Hash]bool)
 	first, last := d.block(i)
@@ -304,7 +330,7 @@ func (d *decoder) byHash(i int, inputs []ethrpc.Bytes, nonces []*big.Int) map[et
 			tx := *decoded
 			tx.Nonce = nonces[(next+j)%len(nonces)]
 			// The fields are ABI words, so they can be hashed before matches checks them.
-			if hash := tx.Hash(); logged[hash] && matches(&tx, hash) {
+			if hash := tx.Hash(); logged[hash] && txs[hash] == nil && matches(&tx, hash) {
 				txs[hash], next = &tx, next+j+1
 				break
 			}

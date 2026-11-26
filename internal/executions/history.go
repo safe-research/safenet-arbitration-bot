@@ -45,10 +45,12 @@ type History struct {
 }
 
 // Complete reports whether the executions found account for every nonce below
-// the Safe's nonce, and the nonce counts the executions: none of them shows
-// that a delegate call set it back, the nonce is one above the highest nonce of
-// each block with a delegate call, which the node can read, and no execution is
-// unknown.
+// the Safe's nonce, and nothing shows that the nonce doesn't count the
+// executions: none of them shows that a delegate call set it back, the nonce is
+// one above the highest nonce of each block with a delegate call, which the
+// node can read, with an official singleton, and no execution is unknown. A
+// module can change the nonce without any of them showing it, since its
+// executions aren't found.
 func (h *History) Complete() bool {
 	return h.Missing != nil && len(h.Missing) == 0 && !h.uncounted
 }
@@ -214,15 +216,18 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 
 // countedAfterDelegateCalls reports whether, at the end of each block with an
 // execution found that is a delegate call, the Safe's nonce is one above the
-// highest nonce of the block's executions found, as executions leave it. A
-// delegate call can set the nonce to anything, which the nonces of the
+// highest nonce of the block's executions found, as executions leave it, and
+// its singleton is an official Safe singleton, whose nonce() is the Safe's
+// nonce. A delegate call can set the nonce to anything, which the nonces of the
 // executions only show if both executions of a reused nonce are found. A
-// delegate call to MultiSendCallOnly makes no delegate calls, so it can't, but
-// an unknown execution may be any delegate call. It warns about each block
-// where the nonce isn't, once about those where it can't be read, such as at a
-// block whose state the node doesn't keep, and once about unknown executions. A
-// read that fails transiently, such as for a rate limit, returns its error
-// instead, since it says nothing about the nonce.
+// delegate call to MultiSendCallOnly only makes calls, which, like an execution
+// that is a call, can only change the nonce through a module, whose executions
+// aren't found, but an unknown execution may be any delegate call. It warns
+// about each block where the nonce or the singleton isn't, once about those
+// where it can't be read, such as at a block whose state the node doesn't keep,
+// and once about unknown executions. A read that fails transiently, such as for
+// a rate limit, returns its error instead, since it says nothing about the
+// nonce.
 func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
 	highest := make(map[uint64]*big.Int)
 	var blocks []uint64
@@ -246,10 +251,22 @@ func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
 		if ethrpc.Transient(err) {
 			return false, err
 		}
+		// The delegate call can also have replaced the singleton, whose nonce() is then
+		// no evidence of the Safe's nonce.
+		var account checks.SafeAccount
+		if next != nil {
+			account, err = checks.NewCallReader(d.Eth, d.safe, ethrpc.BlockNumber(block)).Safe(ctx)
+			if ethrpc.Transient(err) {
+				return false, err
+			}
+		}
 		want := new(big.Int).Add(highest[block], big.NewInt(1))
 		switch {
-		case next == nil:
+		case next == nil || err != nil:
 			unread++
+		case account.SingletonVersion == nil && !olderSingleton(account.Singleton, d.Eth.ChainID()):
+			d.warn(fmt.Errorf("the Safe's singleton at the end of block %d, which has a delegate call, is %s rather than an official Safe singleton, so its nonce() may not be the Safe's nonce", block, account.Singleton))
+			counted = false
 		case next.Cmp(want) != 0:
 			d.warn(fmt.Errorf("the Safe's nonce at the end of block %d, which has a delegate call, is %s rather than %s, one above the highest nonce of its executions, so the nonce doesn't count the executions", block, next, want))
 			counted = false
@@ -266,27 +283,49 @@ func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
 	return counted, nil
 }
 
+// olderSingletons are the official singletons of the Safe versions before
+// 1.3.0, which § 2.1 doesn't list, but which Safes with the proxies of 1.0.0
+// and 1.1.1 that it lists ran on before they upgraded. Their nonce() is the
+// Safe's nonce too. The safe-deployments repository lists them, at
+// https://github.com/safe-global/safe-deployments/tree/v1.37.67/src/assets in
+// v1.0.0, v1.1.1, and v1.2.0/gnosis_safe.json, and of the networks that the
+// Charter covers, only on Ethereum Mainnet and Gnosis Chain.
+var olderSingletons = map[ethrpc.Address]string{
+	ethrpc.MustParseAddress("0xb6029EA3B2c51D09a50B53CA8012FeEB05bDa35A"): "1.0.0",
+	ethrpc.MustParseAddress("0x34CfAC646f301356fAa8B21e94227e3583Fe3F5F"): "1.1.1",
+	ethrpc.MustParseAddress("0x6851D6fDFAfD08c0295C392436245E5bc78B0185"): "1.2.0",
+}
+
+// olderSingleton reports whether address is one of olderSingletons on the
+// network with chainID.
+func olderSingleton(address ethrpc.Address, chainID uint64) bool {
+	return olderSingletons[address] != "" && (chainID == ethrpc.Mainnet || chainID == ethrpc.Gnosis)
+}
+
 // setBack reports whether the nonces of the known transactions of executions,
 // in the order of their logs, show that a delegate call set the Safe's nonce
 // back: an onchain transaction uses a nonce that isn't above those of the
-// earlier ones. The executions of one onchain transaction can log in another
-// order, since an execution nested in another logs first.
+// earlier ones, or uses one twice. The executions of one onchain transaction
+// can log in another order, since an execution nested in another logs first.
 func setBack(executions []Execution) bool {
-	// earlier is the highest nonce of the onchain transactions before tx, and
-	// highest that of all of them so far.
+	// earlier is the highest nonce of the onchain transactions before tx, highest
+	// that of all of them so far, and used the nonces of tx so far.
 	var earlier, highest *big.Int
 	var tx ethrpc.Hash
+	var used map[string]bool
 	for _, e := range executions {
 		if e.Transaction == nil {
 			continue
 		}
 		n := e.Transaction.Nonce
 		if e.TxHash != tx {
-			tx, earlier = e.TxHash, highest
+			tx, earlier, used = e.TxHash, highest, make(map[string]bool)
 		}
-		if earlier != nil && n.Cmp(earlier) <= 0 {
+		key := n.String()
+		if earlier != nil && n.Cmp(earlier) <= 0 || used[key] {
 			return true
 		}
+		used[key] = true
 		if highest == nil || n.Cmp(highest) > 0 {
 			highest = n
 		}

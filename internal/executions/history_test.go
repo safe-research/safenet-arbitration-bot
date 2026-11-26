@@ -417,6 +417,32 @@ func TestFindAllNonceSetBack(t *testing.T) {
 	}
 }
 
+func TestFindAllNonceReusedInOneTransaction(t *testing.T) {
+	// The execution at nonce 0 is a delegate call that sets the Safe's nonce back
+	// to 0 and executes another transaction at nonce 0, which logs first. Every
+	// nonce below the Safe's, 1, is used, and the nonce at the end of the block is
+	// one above the highest, but nonce 0 is used twice.
+	outer, nested := transaction("outer", 0), transaction("nested", 0)
+	outer.Operation = safenet.OperationDelegateCall
+	c := &chain{nonce: big.NewInt(1), logs: []ethrpc.Log{
+		executionLog(executionSuccessEvent, nested.Hash(), hash(1), true, 100, 0),
+		executionLog(executionSuccessEvent, outer.Hash(), hash(1), true, 100, 1),
+	}}
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, []listing{listed(nested, hash(1), 100), listed(outer, hash(1), 100)})}
+	var warnings []error
+	f.Warn = func(err error) { warnings = append(warnings, err) }
+	got, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if got.Complete() || len(got.Executions) != 2 || len(got.Missing) != 0 {
+		t.Errorf("FindAll: got %+v, complete %t; want two executions, none missing, incomplete", got, got.Complete())
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "set the Safe's nonce back") {
+		t.Errorf("warnings: got %v, want one about the nonce set back", warnings)
+	}
+}
+
 func TestFindAllIncomplete(t *testing.T) {
 	// A Safe whose nonce counts an execution that its logs don't have, such as one
 	// in a block that the node misses, and a service that lists none.
@@ -706,15 +732,56 @@ func TestFindNested(t *testing.T) {
 	checkExecutions(t, h.Executions, want)
 }
 
+func TestFindAllRepeatedCalldata(t *testing.T) {
+	// One onchain transaction makes four calls to execTransaction, of A at nonce 0,
+	// which executes B at 1 and C at 2 on the Safe itself, then of A again at 3,
+	// with the same calldata. B and C log first, and the service lists them, so A
+	// at nonce 0, at the third position, is the first to be decoded from the trace,
+	// trying nonce 2 first: the first call of A matches A at 3, and the last one
+	// must still match A at 0.
+	a, b, c := transaction("a", 0), transaction("b", 1), transaction("c", 2)
+	again := *a
+	again.Nonce = big.NewInt(3)
+	var calls []any
+	for _, tx := range []*safenet.SafeTransaction{a, b, c, &again} {
+		calls = append(calls, map[string]any{"type": "CALL", "to": safe, "input": execCall(tx)})
+	}
+	node := &chain{
+		nonce:  big.NewInt(4),
+		txs:    map[ethrpc.Hash]ethrpc.Transaction{hash(1): {To: &relayer, Input: ethrpc.Bytes{1}}},
+		traces: map[ethrpc.Hash]any{hash(1): map[string]any{"type": "CALL", "to": relayer, "input": "0x01", "calls": calls}},
+	}
+	for n, tx := range []*safenet.SafeTransaction{b, c, a, &again} {
+		node.logs = append(node.logs, executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 110, uint64(n)))
+	}
+	f := &Finder{Eth: node.serve(t), Service: historyService(t, []listing{listed(b, hash(1), 110), listed(c, hash(1), 110)})}
+	h, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	want := []Execution{
+		executed(b, hash(1), 110, SourceService), executed(c, hash(1), 110, SourceService),
+		executed(a, hash(1), 110, SourceTrace), executed(&again, hash(1), 110, SourceTrace),
+	}
+	for n := range want {
+		want[n].LogIndex = uint64(n)
+	}
+	checkExecutions(t, h.Executions, want)
+}
+
 func TestDecodeCostPerExecution(t *testing.T) {
-	// Each execution of a block tries the nonce that its position gives first, and
+	// The nonces that a block's executions may have used are worked out once for
+	// the block, each execution tries the nonce that its position gives first, and
 	// each call of a trace the nonce after the last match, and stops at its match,
 	// so an execution costs as much to decode however many its block has: in their
 	// own onchain transactions, which the calldata has, or in one, which only a
-	// trace has. The cost is counted in allocations, which each nonce tried makes.
+	// trace has. The cost is counted in allocations, which each nonce worked out or
+	// tried makes, from a decoder that has only read the Safe's nonce. As in
+	// decodeSources, every execution gets its nonces, even one whose trace is
+	// cached.
 	eth := (&chain{}).serve(t)
 	allocs := func(k int, trace bool) float64 {
-		d := &decoder{Finder: &Finder{Eth: eth}, safe: safe, to: 200, nexts: map[uint64]*big.Int{200: big.NewInt(int64(k))}}
+		var executions []Execution
 		var inputs []ethrpc.Bytes
 		for j := range k {
 			tx := transaction("batched", int64(j))
@@ -722,18 +789,21 @@ func TestDecodeCostPerExecution(t *testing.T) {
 			if !trace {
 				e.TxHash = ethrpc.Hash{0: 0xee, 31: byte(j)}
 			}
-			d.executions, inputs = append(d.executions, e), append(inputs, execCall(tx))
-		}
-		nonces := make([][]*big.Int, k)
-		for j := range k {
-			nonces[j], _ = d.nonces(t.Context(), j)
+			executions, inputs = append(executions, e), append(inputs, execCall(tx))
 		}
 		decode := func() (found int) {
-			if trace {
-				return len(d.byHash(0, inputs, nonces[0]))
+			d := &decoder{
+				Finder: &Finder{Eth: eth}, safe: safe, to: 200, executions: executions,
+				nexts: map[uint64]*big.Int{200: big.NewInt(int64(k))},
 			}
 			for j := range k {
-				found += len(d.byHash(j, inputs[j:j+1], nonces[j]))
+				nonces, _ := d.nonces(t.Context(), j)
+				switch {
+				case !trace:
+					found += len(d.byHash(j, inputs[j:j+1], nonces))
+				case j == 0:
+					found += len(d.byHash(j, inputs, nonces))
+				}
 			}
 			return found
 		}
@@ -759,20 +829,29 @@ func TestFindAllNonceAfterDelegateCall(t *testing.T) {
 		name string
 		// again is whether nonce 1 is used again in block 120, and to the account that
 		// the delegate call is to.
-		again    bool
-		to       ethrpc.Address
-		complete bool
-		warning  string
+		again bool
+		to    ethrpc.Address
+		// singleton is the singleton at the end of block 110, if it isn't Safe 1.3.0.
+		singleton ethrpc.Address
+		complete  bool
+		warning   string
 	}{
-		{"set back", true, target, false, "the Safe's nonce at the end of block 110, which has a delegate call, is 1 rather than 2"},
-		{"kept", false, target, true, ""},
+		{"set back", true, target, ethrpc.Address{}, false, "the Safe's nonce at the end of block 110, which has a delegate call, is 1 rather than 2"},
+		{"kept", false, target, ethrpc.Address{}, true, ""},
+		// The delegate call replaced the singleton, whose nonce() may be anything.
+		{"singleton replaced", false, target, target, false, "the Safe's singleton at the end of block 110, which has a delegate call, is " + target.String()},
+		// The Safe ran on the official 1.1.1 singleton then, before it upgraded.
+		{"older singleton", false, target, ethrpc.MustParseAddress("0x34CfAC646f301356fAa8B21e94227e3583Fe3F5F"), true, ""},
 		// MultiSendCallOnly makes no delegate calls, so the nonce isn't read, which the
 		// node would fail to.
-		{"MultiSendCallOnly", false, callOnly, true, ""},
+		{"MultiSendCallOnly", false, callOnly, ethrpc.Address{}, true, ""},
 	} {
 		txs := []*safenet.SafeTransaction{transaction("first", 0), transaction("delegate call", 1), transaction("last", 2)}
 		txs[1].To = test.to
 		c := &chain{nonce: big.NewInt(3)}
+		if test.singleton != (ethrpc.Address{}) {
+			c.singletons = map[uint64]ethrpc.Address{110: test.singleton}
+		}
 		if test.to == callOnly {
 			c.erringCalls = map[uint64]ethrpc.Error{110: missingState}
 		}
@@ -797,6 +876,56 @@ func TestFindAllNonceAfterDelegateCall(t *testing.T) {
 		}
 		if test.warning == "" && len(warnings) != 0 || test.warning != "" && (len(warnings) != 1 || !strings.Contains(warnings[0].Error(), test.warning)) {
 			t.Errorf("%s: warnings %v, want %q", test.name, warnings, test.warning)
+		}
+	}
+}
+
+func TestOlderSingleton(t *testing.T) {
+	// The 1.1.1 singleton is only official on Ethereum Mainnet and Gnosis Chain,
+	// and a § 2.1 singleton isn't one of the older ones.
+	singleton111 := ethrpc.MustParseAddress("0x34CfAC646f301356fAa8B21e94227e3583Fe3F5F")
+	singleton130 := ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552")
+	for _, test := range []struct {
+		address ethrpc.Address
+		chainID uint64
+		want    bool
+	}{
+		{singleton111, ethrpc.Mainnet, true}, {singleton111, ethrpc.Gnosis, true}, {singleton111, ethrpc.ArbitrumOne, false},
+		{singleton130, ethrpc.Mainnet, false},
+	} {
+		if got := olderSingleton(test.address, test.chainID); got != test.want {
+			t.Errorf("olderSingleton(%s, %d) = %t, want %t", test.address, test.chainID, got, test.want)
+		}
+	}
+}
+
+func TestFindAllSingletonUnanswered(t *testing.T) {
+	// The execution at nonce 1 in block 110 is a delegate call that keeps the
+	// nonce, but the node doesn't answer for the Safe's singleton there, which
+	// leaves the history incomplete, unless the read timed out, which fails
+	// FindAll.
+	txs := []*safenet.SafeTransaction{transaction("first", 0), transaction("delegate call", 1), transaction("last", 2)}
+	for _, rpcErr := range []ethrpc.Error{missingState, nodeTimeout} {
+		c := &chain{nonce: big.NewInt(3), erring: map[string]ethrpc.Error{"eth_getStorageAt": rpcErr}}
+		var listings []listing
+		for n, block := range []uint64{100, 110, 130} {
+			c.logs = append(c.logs, executionLog(executionSuccessEvent, txs[n].Hash(), hash(byte(n+1)), true, block, 0))
+			listings = append(listings, listed(txs[n], hash(byte(n+1)), block))
+		}
+		var warnings []error
+		f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+		got, err := f.FindAll(t.Context(), safe, 200)
+		if ethrpc.Transient(&rpcErr) {
+			if !ethrpc.Transient(err) || !strings.Contains(err.Error(), rpcErr.Message) {
+				t.Errorf("%v: FindAll got %+v, %v; want the node's error", &rpcErr, got, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
+		}
+		if got.Complete() || len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "at the end of 1 blocks with a delegate call is unknown") {
+			t.Errorf("%v: FindAll got %+v, warnings %v; want an incomplete history, with a warning about block 110", &rpcErr, got, warnings)
 		}
 	}
 }

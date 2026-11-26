@@ -61,6 +61,9 @@ type chain struct {
 	receipts map[ethrpc.Hash]ethrpc.Receipt
 	// deployed is the first block at which the Safe has code, or 0 if it has none.
 	deployed uint64
+	// singletons are the singletons that the Safe has in storage slot 0 at blocks
+	// where it doesn't have the Safe 1.3.0 singleton.
+	singletons map[uint64]ethrpc.Address
 
 	mu sync.Mutex
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
@@ -186,6 +189,22 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			} else {
 				res["result"] = "0x"
 			}
+		case "eth_getStorageAt":
+			var address ethrpc.Address
+			var slot ethrpc.Hash
+			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[0], &address)
+			json.Unmarshal(req.Params[1], &slot)
+			json.Unmarshal(req.Params[2], &block)
+			singleton, ok := c.singletons[uint64(block)]
+			if !ok {
+				singleton = ethrpc.MustParseAddress("0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552")
+			}
+			var value ethrpc.Hash
+			if address == safe && slot == (ethrpc.Hash{}) {
+				copy(value[12:], singleton[:])
+			}
+			res["result"] = value
 		case "eth_getTransactionReceipt":
 			var hash ethrpc.Hash
 			json.Unmarshal(req.Params[0], &hash)
