@@ -1,6 +1,7 @@
 // Package simulate runs a Safe transaction with eth_call, on the state of the
 // Safe's chain at a block, in the Safe's own context and without its
-// signatures, and decodes why it reverted.
+// signatures, decodes why it reverted, and traces the calls that it makes with
+// debug_traceCall.
 //
 // A simulation shows what the transaction would do on that state, which is
 // onchain data (Charter § 2.8), not the effects of the transaction after the

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -92,7 +93,9 @@ func TestPrintSimulation(t *testing.T) {
 	} {
 		var stdout bytes.Buffer
 		report := &simulateReport{ChainID: 1, SafeBlock: 200, Safe: safe, Result: &test.result}
-		printSimulation(&env{stdout: &stdout}, report, test.tx)
+		if err := printSimulation(&env{stdout: &stdout}, report, test.tx); err != nil {
+			t.Fatal(err)
+		}
 		if got := stdout.String(); got != test.want {
 			t.Errorf("%s: got\n%s\nwant\n%s", test.name, got, test.want)
 		}
@@ -140,5 +143,64 @@ func TestSimulateErrors(t *testing.T) {
 	}
 	if code, _, stderr := runArbot(t, "simulate"); code != 2 || !strings.Contains(stderr, "-request-file is required") {
 		t.Errorf("simulate without a request file: got status %d, stderr %q", code, stderr)
+	}
+}
+
+func TestPrintTrace(t *testing.T) {
+	safe := ethrpc.MustParseAddress("0x5afE000000000000000000000000000000000001")
+	to := ethrpc.MustParseAddress("0x40A2aCCbd92BCA938b02010E17A5b8929b49130D")
+	created := ethrpc.Address{0: 0xc1}
+	tx := &safenet.SafeTransaction{To: to, Value: new(big.Int), Operation: safenet.OperationDelegateCall}
+	run := func(trace *simulate.Trace) string {
+		var stdout bytes.Buffer
+		result := &simulate.Result{Method: simulate.MethodSimulateAndRevert, Status: simulate.Success, ReturnData: ethrpc.Bytes{}}
+		if err := printSimulation(&env{stdout: &stdout}, &simulateReport{ChainID: 1, SafeBlock: 200, Safe: safe, Result: result, Trace: trace}, tx); err != nil {
+			t.Fatal(err)
+		}
+		return stdout.String()
+	}
+
+	// The node's reason is quoted.
+	got := run(&simulate.Trace{Reason: "debug_traceCall: HTTP 401 Unauthorized: \"\x1b[31mno\"", Calls: []simulate.Frame{}})
+	if want := "\nTrace unavailable: \"debug_traceCall: HTTP 401 Unauthorized: \\\"\\x1b[31mno\\\"\"\n"; !strings.HasSuffix(got, want) {
+		t.Errorf("unavailable trace: got\n%s\nwant it to end with\n%s", got, want)
+	}
+
+	// A frame's type and error come from the node, and its revert reason from a
+	// contract, so they are escaped and shortened, rather than widening every row.
+	long := strings.Repeat("x", 200)
+	got = run(&simulate.Trace{
+		Available: true,
+		Calls: []simulate.Frame{
+			{Depth: 0, Type: "CALL", From: ethrpc.Address{}, To: &safe, Value: new(big.Int), Selector: ethrpc.Bytes{0xb4, 0xfa, 0xba, 0x09}, InputSize: 100, Error: "execution reverted"},
+			{Depth: 1, Type: "DELEGATECALL", From: safe, To: &to, Selector: ethrpc.Bytes{0x8d, 0x80, 0xff, 0x0a}, InputSize: 68, Error: "execution reverted", RevertReason: "GS\x1b013"},
+			{Depth: 2, Type: "CREATE", From: safe, InputSize: 2, InitCodeHash: &ethrpc.Hash{0: 0xaa}, Error: long},
+			{Depth: 2, Type: "\x1b" + long, From: safe, To: &created, Value: big.NewInt(5), InputSize: 0},
+			{Depth: 2, Type: "CREATE2", From: safe, To: &created, InputSize: 3, InitCodeHash: &ethrpc.Hash{0: 0xbb}},
+		},
+	})
+	short := strings.Repeat("x", 100) + "..."
+	for _, line := range []string{
+		`Trace \(debug_traceCall, callTracer\)`,
+		`# +DEPTH +TYPE +FROM +TO +VALUE +SELECTOR +INPUT +ERROR`,
+		`1 +0 +CALL +` + ethrpc.Address{}.String() + ` +` + safe.String() + ` +0 +0xb4faba09 +100 bytes +execution reverted`,
+		`2 +1 +DELEGATECALL +` + safe.String() + ` +` + to.String() + ` +- +0x8d80ff0a +68 bytes +execution reverted: "GS\\x1b013"`,
+		`3 +2 +CREATE +` + safe.String() + ` +- +- +- +2 bytes +` + short,
+		`4 +2 +\\x1b` + strings.Repeat("x", 99) + `\.\.\. +` + safe.String() + ` +` + created.String() + ` +5 +- +0 bytes +-`,
+		`5 +2 +CREATE2 +` + safe.String() + ` +` + created.String() + ` +- +- +3 bytes +-`,
+		`Created contracts`,
+		`DEPTH +TYPE +ADDRESS +CREATOR +INIT CODE +ERROR`,
+		`2 +CREATE +- +` + safe.String() + ` +2 bytes, hash 0xaa0{62} +` + short,
+		`2 +CREATE2 +` + created.String() + ` +` + safe.String() + ` +3 bytes, hash 0xbb0{62} +-`,
+	} {
+		if !regexp.MustCompile(`(?m)^` + line + `$`).MatchString(got) {
+			t.Errorf("trace: output has no line matching %q:\n%s", line, got)
+		}
+	}
+
+	// A trace without creations says so.
+	got = run(&simulate.Trace{Available: true, Calls: []simulate.Frame{{Type: "CALL", To: &safe}}})
+	if !strings.HasSuffix(got, "\nCreated contracts\n\n  none\n") {
+		t.Errorf("trace without creations: got\n%s", got)
 	}
 }

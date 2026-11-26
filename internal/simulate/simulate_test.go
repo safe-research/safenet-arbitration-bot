@@ -24,7 +24,9 @@ var (
 // node serves eth_call at block 100: it returns result, or answers with the
 // JSON-RPC error answer if it is set, and records the last call and the number
 // of calls. It serves the Safe's balance, and answers every request but
-// eth_chainId with the HTTP status status instead, if it is set.
+// eth_chainId with the HTTP status status instead, if it is set. It answers
+// debug_traceCall with trace, or with traceAnswer, or the HTTP status
+// traceStatus, if either is set, or else that it doesn't have the method.
 type node struct {
 	result  ethrpc.Bytes
 	answer  map[string]any
@@ -32,6 +34,10 @@ type node struct {
 	status  int
 	last    map[string]any
 	calls   int
+
+	trace       json.RawMessage
+	traceAnswer map[string]any
+	traceStatus int
 }
 
 func (n *node) serve(t *testing.T) *ethrpc.Client {
@@ -52,15 +58,32 @@ func (n *node) serve(t *testing.T) *ethrpc.Client {
 			json.NewEncoder(w).Encode(res)
 			return
 		}
+		if req.Method == "debug_traceCall" && n.traceStatus != 0 {
+			// httpretry would wait before sending it again.
+			w.Header().Set("Retry-After", "0")
+			http.Error(w, "<html>refused</html>", n.traceStatus)
+			return
+		}
+		// Every method but eth_chainId has the block second.
 		var block ethrpc.BlockNumber
-		if len(req.Params) > 0 {
-			json.Unmarshal(req.Params[len(req.Params)-1], &block)
+		if len(req.Params) > 1 {
+			json.Unmarshal(req.Params[1], &block)
 		}
 		switch {
 		case req.Method == "eth_chainId":
 			res["result"] = "0x1"
 		case block != 100:
 			res["error"] = map[string]any{"code": -32000, "message": "header not found"}
+		case req.Method == "debug_traceCall":
+			json.Unmarshal(req.Params[0], &n.last)
+			switch {
+			case n.traceAnswer != nil:
+				res["error"] = n.traceAnswer
+			case n.trace != nil:
+				res["result"] = n.trace
+			default:
+				res["error"] = map[string]any{"code": -32601, "message": "the method debug_traceCall does not exist/is not available"}
+			}
 		case req.Method == "eth_getBalance":
 			res["result"] = ethrpc.Quantity(n.balance)
 		case req.Method == "eth_call":
