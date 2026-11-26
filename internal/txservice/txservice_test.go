@@ -607,18 +607,26 @@ func TestTransfersErrors(t *testing.T) {
 		t.Errorf("Transfers from a failing service: got error %v, want one with the status", err)
 	}
 	// A page without transfers but with a next link, first or after a full page,
-	// has nothing to list the next page from.
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		results := []map[string]any{}
-		if !r.URL.Query().Has("execution_date__lte") && r.URL.Query().Has("_from") {
-			results = page
+	// has nothing to list the next page from. After a full page, one without a next
+	// link leaves out the transfers at the oldest time of the full page, which the
+	// request asks for again.
+	for _, next := range []any{"https://example.invalid/next", nil} {
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			results := []map[string]any{}
+			if !r.URL.Query().Has("execution_date__lte") && r.URL.Query().Has("_from") {
+				results = page
+			}
+			json.NewEncoder(w).Encode(map[string]any{"next": next, "results": results})
+		}))
+		t.Cleanup(server.Close)
+		filters := []TransferFilter{{Kind: "erc20", ToBlock: 5000}, {Kind: "erc20", From: &safe, ToBlock: 5000}}
+		if next == nil {
+			filters = filters[1:]
 		}
-		json.NewEncoder(w).Encode(map[string]any{"next": "https://example.invalid/next", "results": results})
-	}))
-	t.Cleanup(server.Close)
-	for _, filter := range []TransferFilter{{Kind: "erc20", ToBlock: 5000}, {Kind: "erc20", From: &safe, ToBlock: 5000}} {
-		if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, filter); err == nil || !strings.Contains(err.Error(), "but has a next page") {
-			t.Errorf("Transfers of an empty page with a next link: got error %v, want one about the page", err)
+		for _, filter := range filters {
+			if _, err := NewClient(server.URL, ethrpc.Mainnet).Transfers(t.Context(), safe, filter); err == nil || !strings.Contains(err.Error(), "the service lists no transfers") {
+				t.Errorf("Transfers of an empty page, next link %v: got error %v, want one about the page", next, err)
+			}
 		}
 	}
 	// The service lists nothing for a Safe that it doesn't know, so a listing that

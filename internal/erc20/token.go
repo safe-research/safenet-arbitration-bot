@@ -44,27 +44,30 @@ type Token struct {
 // whose calls revert or halt, or one whose decimals() answers with data that
 // isn't a uint8.
 func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address, block ethrpc.BlockNumber) (*Token, error) {
-	d, ok, err := call(ctx, eth, token, block, solabi.Call(decimalsSelector))
+	result, ok, err := call(ctx, eth, token, block, solabi.Call(decimalsSelector))
 	if err != nil {
 		return nil, err
 	}
 	var decimals *uint8
 	if ok {
 		// A contract that has decimals() but doesn't answer it as an ERC-20 token does
-		// isn't one.
+		// isn't one. A uint8 is one word, so an answer of another length isn't one,
+		// such as a string, whose first word is its offset.
+		d := solabi.NewDecoder(result)
 		n := d.Uint64(0)
-		if d.Err() != nil || n > 255 {
+		if len(result) != 32 || d.Err() != nil || n > 255 {
 			return nil, nil
 		}
 		decimals = new(uint8(n))
 	}
-	if d, ok, err = call(ctx, eth, token, block, solabi.Call(balanceOfSelector, holder)); err != nil || !ok {
+	if result, ok, err = call(ctx, eth, token, block, solabi.Call(balanceOfSelector, holder)); err != nil || !ok {
 		return nil, err
 	}
-	t := &Token{Decimals: decimals, Balance: d.Uint(0)}
-	if d.Err() != nil {
+	// A uint256 is one word too.
+	if len(result) != 32 {
 		return nil, nil
 	}
+	t := &Token{Decimals: decimals, Balance: new(big.Int).SetBytes(result)}
 	// An ERC-721 token answers balanceOf too, but has no allowance, which ERC-20
 	// requires, so a contract without decimals must answer it.
 	if decimals == nil {
@@ -76,23 +79,22 @@ func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address,
 		selector [4]byte
 		value    *string
 	}{{nameSelector, &t.Name}, {symbolSelector, &t.Symbol}} {
-		d, ok, err := call(ctx, eth, token, block, solabi.Call(s.selector))
+		result, ok, err := call(ctx, eth, token, block, solabi.Call(s.selector))
 		if err != nil {
 			return nil, err
 		}
 		if ok {
+			d := solabi.NewDecoder(result)
 			if value := d.String(0); d.Err() == nil {
 				*s.value = value
 			}
 		}
 	}
-	if d, ok, err = call(ctx, eth, token, block, solabi.Call(totalSupplySelector)); err != nil {
+	if result, ok, err = call(ctx, eth, token, block, solabi.Call(totalSupplySelector)); err != nil {
 		return nil, err
 	}
-	if ok {
-		if supply := d.Uint(0); d.Err() == nil {
-			t.TotalSupply = supply
-		}
+	if ok && len(result) == 32 {
+		t.TotalSupply = new(big.Int).SetBytes(result)
 	}
 	return t, nil
 }
@@ -102,24 +104,23 @@ func Read(ctx context.Context, eth *ethrpc.Client, token, holder ethrpc.Address,
 // token's smallest unit, or nil if the account doesn't answer as an ERC-20
 // token does.
 func Allowance(ctx context.Context, eth *ethrpc.Client, token, owner, spender ethrpc.Address, block ethrpc.BlockNumber) (*big.Int, error) {
-	d, ok, err := call(ctx, eth, token, block, solabi.Call(allowanceSelector, owner, spender))
+	result, ok, err := call(ctx, eth, token, block, solabi.Call(allowanceSelector, owner, spender))
 	if err != nil || !ok {
 		return nil, err
 	}
-	allowance := d.Uint(0)
-	if d.Err() != nil {
+	if len(result) != 32 {
 		return nil, nil
 	}
-	return allowance, nil
+	return new(big.Int).SetBytes(result), nil
 }
 
-// call calls the account token with data as of block, and returns a decoder for
-// its return data, or false if the call reverted or halted, such as on an
-// invalid opcode, or returned no data, as an account without code does, or a
-// contract without the function whose fallback returns nothing. Any other error
-// fails the call, so that a node that fails to answer isn't read as an account
-// that isn't a token.
-func call(ctx context.Context, eth *ethrpc.Client, token ethrpc.Address, block ethrpc.BlockNumber, data []byte) (*solabi.Decoder, bool, error) {
+// call calls the account token with data as of block, and returns its return
+// data, or false if the call reverted or halted, such as on an invalid opcode,
+// or returned no data, as an account without code does, or a contract without
+// the function whose fallback returns nothing. Any other error fails the call,
+// so that a node that fails to answer isn't read as an account that isn't a
+// token.
+func call(ctx context.Context, eth *ethrpc.Client, token ethrpc.Address, block ethrpc.BlockNumber, data []byte) (ethrpc.Bytes, bool, error) {
 	result, err := eth.Call(ctx, ethrpc.CallRequest{To: token, Data: data}, block)
 	if err != nil {
 		if ethrpc.Reverted(err) || ethrpc.Halted(err) {
@@ -130,5 +131,5 @@ func call(ctx context.Context, eth *ethrpc.Client, token ethrpc.Address, block e
 	if len(result) == 0 {
 		return nil, false, nil
 	}
-	return solabi.NewDecoder(result), true, nil
+	return result, true, nil
 }

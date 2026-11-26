@@ -188,15 +188,15 @@ func transfers(ctx context.Context, e *env, args []string) error {
 			if err != nil {
 				return fmt.Errorf("listing the transfers of %s from the Safe Transaction Service, which -all needs: %w", ref.Safe, err)
 			}
-			// The cap is on the transfers of all the kinds listed together.
+			// The service isn't trusted to filter rightly, and the cap is on the transfers
+			// of all the kinds listed together that it was asked for.
+			found = slices.DeleteFunc(found, func(t txservice.Transfer) bool {
+				return t.Block > ref.SafeBlock || !report.lists(t)
+			})
 			if listed = append(listed, found...); len(listed) > txservice.MaxListed {
 				return fmt.Errorf("listing the transfers of %s from the Safe Transaction Service, which -all needs: the service lists more than %d transfers", ref.Safe, txservice.MaxListed)
 			}
 		}
-		// The service isn't trusted to filter rightly.
-		listed = slices.DeleteFunc(listed, func(t txservice.Transfer) bool {
-			return t.Block > ref.SafeBlock || !report.lists(t)
-		})
 		var blocks []uint64
 		for _, t := range listed {
 			blocks = append(blocks, t.Block)

@@ -166,12 +166,19 @@ func TestAllowance(t *testing.T) {
 
 func TestReadNotAToken(t *testing.T) {
 	invalid, loop, nft := ethrpc.Address{19: 0xfe}, ethrpc.Address{19: 0x5b}, ethrpc.Address{19: 0x72}
-	wide, short := ethrpc.Address{19: 0xd1}, ethrpc.Address{19: 0xd2}
+	wide, short, text := ethrpc.Address{19: 0xd1}, ethrpc.Address{19: 0xd2}, ethrpc.Address{19: 0xd3}
+	textBalance, textAllowance := ethrpc.Address{19: 0xd4}, ethrpc.Address{19: 0xd5}
 	eth := callNode(t, map[ethrpc.Address]contract{
 		// Contracts that have decimals(), but answer it with a number above 255, or
-		// with data that isn't a number, even with an allowance.
+		// with data that isn't a number, such as a string, whose first word, its
+		// offset, is 32, even with an allowance.
 		wide:  {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode(uint64(256)), balanceOfSelector: solabi.Encode(uint64(1)), allowanceSelector: solabi.Encode(uint64(0))}},
 		short: {results: map[[4]byte][]byte{decimalsSelector: {0x12}, balanceOfSelector: solabi.Encode(uint64(1)), allowanceSelector: solabi.Encode(uint64(0))}},
+		text:  {results: map[[4]byte][]byte{decimalsSelector: solabi.Encode("18"), balanceOfSelector: solabi.Encode(uint64(1)), allowanceSelector: solabi.Encode(uint64(0))}},
+		// Contracts without decimals() that answer balanceOf, or allowance, with a
+		// string.
+		textBalance:   {results: map[[4]byte][]byte{balanceOfSelector: solabi.Encode("1"), allowanceSelector: solabi.Encode(uint64(0))}},
+		textAllowance: {results: map[[4]byte][]byte{balanceOfSelector: solabi.Encode(uint64(1)), allowanceSelector: solabi.Encode("0")}},
 		// A contract whose calls revert.
 		tokenA: {results: map[[4]byte][]byte{}},
 		// A contract with decimals, but no balanceOf.
@@ -187,7 +194,7 @@ func TestReadNotAToken(t *testing.T) {
 		invalid: {halt: "EVM error: InvalidFEOpcode"},
 		loop:    {halt: "out of gas: gas required exceeds: 50000000"},
 	})
-	for _, account := range []ethrpc.Address{tokenA, tokenB, alice, bob, invalid, loop, nft, wide, short} {
+	for _, account := range []ethrpc.Address{tokenA, tokenB, alice, bob, invalid, loop, nft, wide, short, text, textBalance, textAllowance} {
 		if got, err := Read(t.Context(), eth, account, safe, 100); got != nil || err != nil {
 			t.Errorf("Read(%s): got %+v and error %v, want nil", account, got, err)
 		}

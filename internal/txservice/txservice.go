@@ -299,11 +299,13 @@ func (c *Client) Transfers(ctx context.Context, safe ethrpc.Address, filter Tran
 		if err := c.getListing(ctx, base+"/?"+query.Encode(), &page); err != nil {
 			return nil, err
 		}
+		// A request after the first is for the transfers up to the oldest time of the
+		// page before, so it lists those at that time again.
+		if len(page.Results) == 0 && before != nil {
+			return nil, fmt.Errorf("the service lists no transfers up to %s, though it listed some at that time", before.Format(time.RFC3339))
+		}
 		if len(page.Results) == 0 && page.Next != nil {
-			if before == nil {
-				return nil, errors.New("the service lists no transfers, but has a next page")
-			}
-			return nil, fmt.Errorf("the service lists no transfers up to %s, but has a next page", before.Format(time.RFC3339))
+			return nil, errors.New("the service lists no transfers, but has a next page")
 		}
 		var oldest time.Time
 		for i, r := range page.Results {
