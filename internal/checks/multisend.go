@@ -32,6 +32,13 @@ var multiSends = map[ethrpc.Address]multiSend{
 	ethrpc.MustParseAddress("0xA83c336B20401Af773B6219BA5027174338D1836"): {version: "1.5.0", callOnly: true},
 }
 
+// MultiSendCallOnly reports whether address is that of a MultiSendCallOnly of
+// multiSends, which makes no delegate calls, so a delegate call to it can only
+// change the Safe through calls to it.
+func MultiSendCallOnly(address ethrpc.Address) bool {
+	return multiSends[address].callOnly
+}
+
 // maxDataLength is a data length that a MultiSend transaction can't exceed
 // without reverting: its call would expand memory past 2^24 bytes, which costs
 // more than 2^29 gas, more than a transaction can use on the networks that the

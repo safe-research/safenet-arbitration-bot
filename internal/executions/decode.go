@@ -35,8 +35,13 @@ type decoder struct {
 	// that got no answer.
 	nexts     map[uint64]*big.Int
 	nonceErrs map[uint64]error
-	txs       map[ethrpc.Hash]*ethrpc.Transaction
-	traces    map[ethrpc.Hash][]ethrpc.Bytes
+	// nonceLists are the nonces that the executions of each block may have used, by
+	// block (see nonces).
+	nonceLists map[uint64]nonceList
+	// calldata and traces are the Safe transactions that the calldata and a trace
+	// of an onchain transaction have, by hash (see byHash).
+	calldata map[ethrpc.Hash]map[ethrpc.Hash]*safenet.SafeTransaction
+	traces   map[ethrpc.Hash]map[ethrpc.Hash]*safenet.SafeTransaction
 	// untraced is whether the node refused a trace, or doesn't serve them, so that
 	// it isn't asked for more.
 	untraced bool
@@ -88,15 +93,15 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 	// The calldata and traces have no nonce, so it is worked out from the Safe's. A
 	// nonce that the node failed to read leaves them out, which only fails the
 	// decoding if no other source has the transaction.
-	nonce, nonceErr := d.nonce(ctx, i)
-	if nonce != nil {
-		if tx := d.fromCalldata(ctx, e, nonce); tx != nil {
+	nonces, nonceErr := d.nonces(ctx, i)
+	if len(nonces) > 0 {
+		if tx := d.fromCalldata(ctx, i, nonces); tx != nil {
 			return SourceCalldata, tx
 		}
 		if d.err != nil {
 			return "", nil
 		}
-		if tx := d.fromTrace(ctx, e, nonce); tx != nil {
+		if tx := d.fromTrace(ctx, i, nonces); tx != nil {
 			return SourceTrace, tx
 		}
 	}
@@ -124,24 +129,82 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 	return "", nil
 }
 
-// nonce returns the nonce that executions[i] used, or nil if it is unknown,
-// with the error of the read of the Safe's nonce if it got no answer. The
-// Safe's nonce is read once for each block, with a warning if that fails. Every
-// execution uses the Safe's next nonce, so the executions of a range of blocks
-// that the search read in full used the nonces just below the Safe's nonce at
-// its end: up to to for Find, and the execution's own block for FindAll. The
-// executions are in the order of their logs.
-func (d *decoder) nonce(ctx context.Context, i int) (*big.Int, error) {
-	block, later := uint64(d.to), len(d.executions)-i-1
-	if d.byBlock {
-		block, later = d.executions[i].Block, 0
-		for _, e := range d.executions[i+1:] {
-			if e.Block != block {
-				break
-			}
-			later++
+// nonces returns the nonces that executions[i] may have used, or none if they
+// are unknown, with the error of the read of the Safe's nonce if it got no
+// answer. Every execution uses the Safe's next nonce, so the executions of a
+// range of blocks that the search read in full used the nonces just below the
+// Safe's nonce at its end: up to to for Find, and the execution's own block for
+// FindAll. The executions are in the order of their logs, so the nonce of
+// executions[i] is the one that its position gives, which comes first, then
+// those above it and those below. But an execution nested in another logs
+// before it, so executions[i] may have used any of the nonces of its block's
+// executions, and the hash check proves which. The nonces are worked out once
+// for each block, and those of its executions are windows of one list.
+func (d *decoder) nonces(ctx context.Context, i int) ([]*big.Int, error) {
+	block := d.executions[i].Block
+	list, ok := d.nonceLists[block]
+	if !ok {
+		first, last := d.block(i)
+		at, after := uint64(d.to), len(d.executions)-last-1
+		if d.byBlock {
+			at, after = block, 0
 		}
+		next, err := d.nonceAt(ctx, at)
+		list.first, list.err = first, err
+		if next != nil {
+			// The block's executions used as many nonces just below top as there are of
+			// them, and the position of executions[first] gives the lowest.
+			top := new(big.Int).Sub(next, big.NewInt(int64(after)))
+			for below := last - first + 1; below > 0; below-- {
+				if nonce := new(big.Int).Sub(top, big.NewInt(int64(below))); nonce.Sign() >= 0 {
+					list.nonces = append(list.nonces, nonce)
+				} else {
+					list.first++
+				}
+			}
+			list.nonces = append(list.nonces, list.nonces...)
+		}
+		if d.nonceLists == nil {
+			d.nonceLists = make(map[uint64]nonceList)
+		}
+		d.nonceLists[block] = list
 	}
+	n := len(list.nonces) / 2
+	if n == 0 {
+		return nil, list.err
+	}
+	start := max(0, i-list.first)
+	return list.nonces[start : start+n], nil
+}
+
+// nonceList is the nonces that the executions of a block may have used, in the
+// order that their positions give them, twice, so that those from any position
+// on, followed by those before it, are a window of it. first is the index of
+// the execution whose position gives the first of them, and err the error of
+// the read of the Safe's nonce if it got no answer.
+type nonceList struct {
+	nonces []*big.Int
+	first  int
+	err    error
+}
+
+// block returns the indexes of the first and last executions in the block of
+// executions[i].
+func (d *decoder) block(i int) (first, last int) {
+	first, last = i, i
+	for first > 0 && d.executions[first-1].Block == d.executions[i].Block {
+		first--
+	}
+	for last+1 < len(d.executions) && d.executions[last+1].Block == d.executions[i].Block {
+		last++
+	}
+	return first, last
+}
+
+// nonceAt returns the Safe's nonce at the end of block, or nil if it can't be
+// read, with the error of the read if it got no answer. It reads it once for
+// each block, with a warning if that fails.
+func (d *decoder) nonceAt(ctx context.Context, block uint64) (*big.Int, error) {
 	next, ok := d.nexts[block]
 	if !ok {
 		var err error
@@ -163,24 +226,17 @@ func (d *decoder) nonce(ctx context.Context, i int) (*big.Int, error) {
 		}
 		d.nexts[block] = next
 	}
-	if next == nil {
-		return nil, d.nonceErrs[block]
-	}
-	nonce := new(big.Int).Sub(next, big.NewInt(int64(later+1)))
-	if nonce.Sign() < 0 {
-		return nil, nil
-	}
-	return nonce, nil
+	return next, d.nonceErrs[block]
 }
 
-// fromCalldata decodes the Safe transaction of e from the calldata of its
-// onchain transaction, if that calls the Safe's execTransaction with a
-// transaction that used nonce and has the hash that e has.
-func (d *decoder) fromCalldata(ctx context.Context, e Execution, nonce *big.Int) *safenet.SafeTransaction {
-	tx, ok := d.txs[e.TxHash]
+// fromCalldata decodes the Safe transaction of executions[i] from the calldata
+// of its onchain transaction, if that calls the Safe's execTransaction with a
+// transaction that used one of nonces and has the hash that it logged.
+func (d *decoder) fromCalldata(ctx context.Context, i int, nonces []*big.Int) *safenet.SafeTransaction {
+	e := d.executions[i]
+	txs, ok := d.calldata[e.TxHash]
 	if !ok {
-		var err error
-		result, err := d.Eth.GetTransactionByHash(ctx, e.TxHash)
+		tx, err := d.Eth.GetTransactionByHash(ctx, e.TxHash)
 		// The node logged the transaction, so the only error that is an answer is not
 		// having it, from a node that only indexes recent transactions.
 		if err != nil && !errors.Is(err, ethrpc.ErrNotFound) {
@@ -189,24 +245,22 @@ func (d *decoder) fromCalldata(ctx context.Context, e Execution, nonce *big.Int)
 		}
 		if err != nil {
 			d.warn(fmt.Errorf("getting transaction %s: %w", e.TxHash, err))
-		} else {
-			tx = &result
+		} else if tx.To != nil && *tx.To == d.safe {
+			txs = d.byHash(i, []ethrpc.Bytes{tx.Input}, nonces)
 		}
-		if d.txs == nil {
-			d.txs = make(map[ethrpc.Hash]*ethrpc.Transaction)
+		if d.calldata == nil {
+			d.calldata = make(map[ethrpc.Hash]map[ethrpc.Hash]*safenet.SafeTransaction)
 		}
-		d.txs[e.TxHash] = tx
+		d.calldata[e.TxHash] = txs
 	}
-	if tx == nil || tx.To == nil || *tx.To != d.safe {
-		return nil
-	}
-	return d.candidate(tx.Input, e, nonce)
+	return txs[e.SafeTxHash]
 }
 
-// fromTrace decodes the Safe transaction of e from the calls to the Safe's
-// execTransaction in a trace of its onchain transaction.
-func (d *decoder) fromTrace(ctx context.Context, e Execution, nonce *big.Int) *safenet.SafeTransaction {
-	inputs, ok := d.traces[e.TxHash]
+// fromTrace decodes the Safe transaction of executions[i] from the calls to the
+// Safe's execTransaction in a trace of its onchain transaction.
+func (d *decoder) fromTrace(ctx context.Context, i int, nonces []*big.Int) *safenet.SafeTransaction {
+	e := d.executions[i]
+	txs, ok := d.traces[e.TxHash]
 	if !ok && !d.untraced {
 		var root *callFrame
 		// Most public nodes don't serve traces, so the next source may have the
@@ -228,7 +282,7 @@ func (d *decoder) fromTrace(ctx context.Context, e Execution, nonce *big.Int) *s
 			d.fail(fmt.Errorf("tracing transaction %s: debug_traceTransaction: null result", e.TxHash))
 			return nil
 		case err == nil:
-			inputs = root.callsTo(d.safe, nil)
+			txs = d.byHash(i, root.callsTo(d.safe, nil), nonces)
 		case unserved(err):
 			d.untraced = true
 		case refused && httpErr.StatusCode < http.StatusInternalServerError && httpErr.StatusCode != http.StatusRequestTimeout:
@@ -241,30 +295,48 @@ func (d *decoder) fromTrace(ctx context.Context, e Execution, nonce *big.Int) *s
 			d.warn(fmt.Errorf("tracing transaction %s: %w", e.TxHash, err))
 		}
 		if d.traces == nil {
-			d.traces = make(map[ethrpc.Hash][]ethrpc.Bytes)
+			d.traces = make(map[ethrpc.Hash]map[ethrpc.Hash]*safenet.SafeTransaction)
 		}
-		d.traces[e.TxHash] = inputs
+		d.traces[e.TxHash] = txs
 	}
-	for _, input := range inputs {
-		if tx := d.candidate(input, e, nonce); tx != nil {
-			return tx
-		}
-	}
-	return nil
+	return txs[e.SafeTxHash]
 }
 
-// candidate returns the Safe transaction that the calldata of a call to
-// execTransaction has, given that it used nonce, if it has the hash that e has.
-func (d *decoder) candidate(input []byte, e Execution, nonce *big.Int) *safenet.SafeTransaction {
-	tx := decodeCall(d.safe, d.Eth.ChainID(), input)
-	if tx == nil {
-		return nil
+// byHash returns the Safe transactions that the calldata of calls to
+// execTransaction in the onchain transaction of executions[i] have, given that
+// they used one of nonces, by hash, if the Safe logged their executions in it.
+// A trace may have a call for each execution, so each is decoded once for all
+// of them. A Safe transaction takes its nonce when its execution starts, so the
+// calls, in the order that they start, use consecutive nonces, the first of
+// them usually the first of nonces: each call tries the nonce after the last
+// match first, and stops at its match. Calls with the same calldata may have
+// used other nonces, so a call skips the hashes that earlier calls matched.
+func (d *decoder) byHash(i int, inputs []ethrpc.Bytes, nonces []*big.Int) map[ethrpc.Hash]*safenet.SafeTransaction {
+	logged := make(map[ethrpc.Hash]bool)
+	first, last := d.block(i)
+	for _, e := range d.executions[first : last+1] {
+		if e.TxHash == d.executions[i].TxHash {
+			logged[e.SafeTxHash] = true
+		}
 	}
-	tx.Nonce = nonce
-	if !matches(tx, e.SafeTxHash) {
-		return nil
+	txs := make(map[ethrpc.Hash]*safenet.SafeTransaction)
+	next := 0
+	for _, input := range inputs {
+		decoded := decodeCall(d.safe, d.Eth.ChainID(), input)
+		if decoded == nil {
+			continue
+		}
+		for j := range nonces {
+			tx := *decoded
+			tx.Nonce = nonces[(next+j)%len(nonces)]
+			// The fields are ABI words, so they can be hashed before matches checks them.
+			if hash := tx.Hash(); logged[hash] && txs[hash] == nil && matches(&tx, hash) {
+				txs[hash], next = &tx, next+j+1
+				break
+			}
+		}
 	}
-	return tx
+	return txs
 }
 
 // unserved reports whether err is a node's answer that it doesn't serve the

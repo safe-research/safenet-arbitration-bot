@@ -1,6 +1,6 @@
 // Package events decodes the logs of well-known events: those of ERC-20 and
-// ERC-721 tokens, WETH, and Safe 1.3.0, 1.4.1, and 1.5.0 and their proxy
-// factories.
+// ERC-721 tokens, WETH, Safe 1.3.0, 1.4.1, and 1.5.0, and their proxy factories
+// and those of 1.0.0 and 1.1.1.
 //
 // Logs are decoded by their signature only, so any contract can emit a log that
 // decodes as one of them. Callers must look at the emitter.
@@ -111,6 +111,9 @@ func init() {
 	define("SafeReceived", ix("address", "sender"), in("uint256", "value"))
 	define("ApproveHash", ix("bytes32", "approvedHash"), ix("address", "owner"))
 	define("SignMsg", ix("bytes32", "msgHash"))
+
+	// The proxy factories of Safe 1.0.0 and 1.1.1 log the proxy alone.
+	define("ProxyCreation", in("address", "proxy"))
 
 	// Safe proxy factories, when they create a proxy of a singleton. Version 1.3.0
 	// doesn't index the proxy, and the later versions do.

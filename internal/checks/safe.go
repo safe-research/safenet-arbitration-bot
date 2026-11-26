@@ -84,24 +84,38 @@ var singletons = map[ethrpc.Address]string{
 	ethrpc.MustParseAddress("0xEdd160fEBBD92E350D4D398fb636302fccd67C7e"): "1.5.0+L2",
 }
 
+// proxyFactory is an official proxy factory of a proxy version, and the
+// networks that it is on.
+type proxyFactory struct {
+	version  string
+	networks []uint64
+}
+
 // proxyFactories are the official proxy factories of the proxy versions that
-// the Charter lists in § 2.1 whose ProxyCreation event has the proxy and the
-// singleton, by version: 1.3.0, at its canonical and EIP-155 addresses, 1.4.1,
-// and 1.5.0. The 1.0.0 and 1.1.1 factories log ProxyCreation(address), which
-// internal/events doesn't decode. Like the singletons, the safe-deployments
-// repository lists each of them on every network that the Charter covers, and
-// they are deterministic deployments.
-var proxyFactories = map[ethrpc.Address]string{
-	ethrpc.MustParseAddress("0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2"): "1.3.0",
-	ethrpc.MustParseAddress("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC"): "1.3.0",
-	ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"): "1.4.1",
-	ethrpc.MustParseAddress("0x14F2982D601c9458F93bd70B218933A6f8165e7b"): "1.5.0",
+// the Charter lists in § 2.1, with their versions and the networks that they
+// are on, as the safe-deployments repository lists them: 1.0.0, 1.1.1, 1.3.0,
+// at its canonical and EIP-155 addresses, 1.4.1, and 1.5.0. Like the
+// singletons, the factories of 1.3.0 and later are on every network that the
+// Charter covers, and are deterministic deployments. Those of 1.0.0 and 1.1.1
+// are only on Ethereum Mainnet and Gnosis Chain, and their addresses have other
+// code on Arbitrum One.
+var proxyFactories = map[ethrpc.Address]proxyFactory{
+	ethrpc.MustParseAddress("0x12302fE9c02ff50939BaAaaf415fc226C078613C"): {"1.0.0", []uint64{ethrpc.Mainnet, ethrpc.Gnosis}},
+	ethrpc.MustParseAddress("0x76E2cFc1F5Fa8F6a5b3fC4c8F4788F0116861F9B"): {"1.1.1", []uint64{ethrpc.Mainnet, ethrpc.Gnosis}},
+	ethrpc.MustParseAddress("0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2"): {"1.3.0", networks},
+	ethrpc.MustParseAddress("0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC"): {"1.3.0", networks},
+	ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"): {"1.4.1", networks},
+	ethrpc.MustParseAddress("0x14F2982D601c9458F93bd70B218933A6f8165e7b"): {"1.5.0", networks},
 }
 
 // ProxyFactoryVersion returns the version of the official proxy factory of
-// proxyFactories at address, or "" if it isn't one.
-func ProxyFactoryVersion(address ethrpc.Address) string {
-	return proxyFactories[address]
+// proxyFactories at address on the network with chainID, or "" if it isn't one.
+func ProxyFactoryVersion(address ethrpc.Address, chainID uint64) string {
+	factory := proxyFactories[address]
+	if !slices.Contains(factory.networks, chainID) {
+		return ""
+	}
+	return factory.version
 }
 
 // unsupportedSafe finds a call by an account that isn't a Safe insecure, under
