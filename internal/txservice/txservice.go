@@ -99,16 +99,17 @@ func (c *Client) URL() string {
 }
 
 // Transaction returns the Safe transaction that the service has with the Safe
-// transaction hash safeTxHash, or ErrNotFound. The transaction's fields are as
-// the service reports them, so it may not have the hash it was asked for.
-func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*safenet.SafeTransaction, error) {
+// transaction hash safeTxHash, with its execution, if the service says that it
+// was executed, or ErrNotFound. The transaction's fields and its execution are
+// as the service reports them, so it may not have the hash it was asked for.
+func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*Execution, error) {
 	u, err := url.JoinPath(c.baseURL, "api", "v1", "multisig-transactions", safeTxHash.String())
 	if err != nil {
 		return nil, err
 	}
 	// The service redirects paths without a trailing slash.
-	var t transaction
-	err = c.get(ctx, u+"/", &t)
+	var l listing
+	err = c.get(ctx, u+"/", &l)
 	// The service answers 404 for a transaction that it doesn't have, but so does
 	// any server for a wrong URL.
 	if errors.Is(err, ErrNotFound) {
@@ -119,7 +120,8 @@ func (c *Client) Transaction(ctx context.Context, safeTxHash ethrpc.Hash) (*safe
 	if err != nil {
 		return nil, err
 	}
-	return t.safeTransaction(c.chainID), nil
+	x := l.execution(c.chainID)
+	return &x, nil
 }
 
 // confirm returns an error unless the server at the base URL is a service,
@@ -153,8 +155,8 @@ func (c *Client) about(ctx context.Context) error {
 	return nil
 }
 
-// Execution is a Safe transaction that the service lists as executed, with the
-// onchain transaction and block that it says executed it.
+// Execution is a Safe transaction that the service has, with the onchain
+// transaction and block that it says executed it.
 type Execution struct {
 	// Transaction is the Safe transaction, with its fields as the service reports
 	// them.
@@ -165,6 +167,33 @@ type Execution struct {
 	SafeTxHash ethrpc.Hash
 	TxHash     ethrpc.Hash
 	Block      uint64
+	// Executed is whether the service says that the transaction was executed, as it
+	// says of every transaction that Executions lists.
+	Executed bool
+}
+
+// listing is a Safe transaction as the service lists it, with its execution.
+type listing struct {
+	transaction
+	SafeTxHash      ethrpc.Hash  `json:"safeTxHash"`
+	TransactionHash *ethrpc.Hash `json:"transactionHash"`
+	BlockNumber     *uint64      `json:"blockNumber"`
+	IsExecuted      *bool        `json:"isExecuted"`
+}
+
+// execution returns l as an execution of a Safe transaction on the chain with
+// the ID chainID.
+func (l *listing) execution(chainID *big.Int) Execution {
+	x := Execution{SafeTxHash: l.SafeTxHash, Transaction: l.safeTransaction(chainID), Executed: l.IsExecuted != nil && *l.IsExecuted}
+	// An execution without its onchain transaction or block is still listed, so
+	// that the caller reports it rather than drop it.
+	if l.TransactionHash != nil {
+		x.TxHash = *l.TransactionHash
+	}
+	if l.BlockNumber != nil {
+		x.Block = *l.BlockNumber
+	}
+	return x
 }
 
 // pageSize is the number of results that the client asks for in each request of
@@ -180,13 +209,7 @@ const MaxListed = 100_000
 // that owners signed, so executions by modules aren't included. It returns
 // ErrNotFound if the service doesn't know the Safe.
 func (c *Client) Executions(ctx context.Context, safe ethrpc.Address) ([]Execution, error) {
-	results, err := list[struct {
-		transaction
-		SafeTxHash      ethrpc.Hash  `json:"safeTxHash"`
-		TransactionHash *ethrpc.Hash `json:"transactionHash"`
-		BlockNumber     *uint64      `json:"blockNumber"`
-		IsExecuted      *bool        `json:"isExecuted"`
-	}](ctx, c, safe, "multisig-transactions", url.Values{"executed": {"true"}, "ordering": {"nonce"}})
+	results, err := list[listing](ctx, c, safe, "multisig-transactions", url.Values{"executed": {"true"}, "ordering": {"nonce"}})
 	if err != nil {
 		return nil, err
 	}
@@ -200,15 +223,9 @@ func (c *Client) Executions(ctx context.Context, safe ethrpc.Address) ([]Executi
 		if r.IsExecuted != nil && !*r.IsExecuted {
 			continue
 		}
-		x := Execution{SafeTxHash: r.SafeTxHash, Transaction: r.safeTransaction(c.chainID)}
-		// An execution without its onchain transaction or block is still listed, so
-		// that the caller reports it rather than drop it.
-		if r.TransactionHash != nil {
-			x.TxHash = *r.TransactionHash
-		}
-		if r.BlockNumber != nil {
-			x.Block = *r.BlockNumber
-		}
+		// The listing is of executed transactions, so one that doesn't say is.
+		x := r.execution(c.chainID)
+		x.Executed = true
 		executions = append(executions, x)
 	}
 	return executions, nil

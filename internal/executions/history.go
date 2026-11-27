@@ -125,7 +125,7 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	if f.Service == nil {
 		return nil, errors.New("finding every execution needs the Safe Transaction Service")
 	}
-	nonce, err := f.readNonce(ctx, safe, to)
+	nonce, err := f.ReadNonce(ctx, safe, to)
 	if err != nil {
 		return nil, err
 	}

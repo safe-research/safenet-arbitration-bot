@@ -116,15 +116,50 @@ type Finder struct {
 // Find returns the Safe transactions that the Safe executed in the blocks from
 // to to, including both, in order.
 func (f *Finder) Find(ctx context.Context, safe ethrpc.Address, from, to ethrpc.BlockNumber) ([]Execution, error) {
+	s, err := f.Scan(ctx, safe, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return s.Decode(ctx, from, to)
+}
+
+// Scan is the executions that a Safe logged in a range of blocks, before their
+// Safe transactions are decoded.
+type Scan struct {
+	// Executions are the executions, in order, each with its Safe transaction hash,
+	// but no source or transaction.
+	Executions []Execution
+	c          *collector
+}
+
+// Scan returns the executions that the Safe logged in the blocks from to to,
+// including both, without decoding their Safe transactions, which takes more
+// requests.
+func (f *Finder) Scan(ctx context.Context, safe ethrpc.Address, from, to ethrpc.BlockNumber) (*Scan, error) {
 	c := newCollector(f, safe)
 	if _, err := c.scan(ctx, from, to); err != nil {
 		return nil, err
 	}
-	d := &decoder{Finder: f, safe: safe, to: to, executions: c.executions, events: c.events}
+	return &Scan{Executions: c.executions, c: c}, nil
+}
+
+// Decode returns the executions of the scan in the blocks from to to, including
+// both, in order, with their Safe transactions decoded, as Find decodes them.
+// The calldata and trace sources work out their nonces from the Safe's nonce at
+// the end of to, so the scan must have every block from from to to, and its
+// executions outside them don't count.
+func (s *Scan) Decode(ctx context.Context, from, to ethrpc.BlockNumber) ([]Execution, error) {
+	found := []Execution{}
+	for _, e := range s.Executions {
+		if e.Block >= uint64(from) && e.Block <= uint64(to) {
+			found = append(found, e)
+		}
+	}
+	d := &decoder{Finder: s.c.Finder, safe: s.c.safe, to: to, executions: found, events: s.c.events}
 	if err := d.decodeAll(ctx); err != nil {
 		return nil, err
 	}
-	return c.executions, nil
+	return found, nil
 }
 
 // collector collects the executions of a Safe, and its SafeMultiSigTransaction
@@ -206,8 +241,10 @@ type notNonce struct{ error }
 
 func (e notNonce) Unwrap() error { return e.error }
 
-// readNonce returns the nonce of the Safe at block.
-func (f *Finder) readNonce(ctx context.Context, safe ethrpc.Address, block ethrpc.BlockNumber) (*big.Int, error) {
+// ReadNonce returns the nonce of the Safe at the end of block. An answer that
+// isn't a nonce, such as from an account without code, is an error that says
+// so.
+func (f *Finder) ReadNonce(ctx context.Context, safe ethrpc.Address, block ethrpc.BlockNumber) (*big.Int, error) {
 	result, err := f.Eth.Call(ctx, ethrpc.CallRequest{To: safe, Data: solabi.Call(nonceSelector)}, block)
 	if err != nil {
 		return nil, fmt.Errorf("reading the nonce of %s at block %d: %w", safe, block, err)
@@ -223,6 +260,25 @@ func (f *Finder) readNonce(ctx context.Context, safe ethrpc.Address, block ethrp
 		return nil, notNonce{fmt.Errorf("reading the nonce of %s at block %d: %w", safe, block, err)}
 	}
 	return nonce, nil
+}
+
+// InReceipt returns the execution of the Safe transaction with the hash
+// safeTxHash that safe logged in the onchain transaction of receipt, and
+// whether it logged one. Its transaction is unknown, since the log only has its
+// hash.
+func InReceipt(receipt ethrpc.Receipt, safe ethrpc.Address, safeTxHash ethrpc.Hash) (Execution, bool) {
+	for _, log := range receipt.Logs {
+		if log.Removed || log.Address != safe || len(log.Topics) == 0 ||
+			log.Topics[0] != executionSuccessEvent && log.Topics[0] != executionFailureEvent {
+			continue
+		}
+		// The execution is the receipt's, whatever its logs say.
+		log.TransactionHash, log.BlockNumber = receipt.TransactionHash, receipt.BlockNumber
+		if e, ok := decodeExecution(log); ok && e.SafeTxHash == safeTxHash {
+			return e, true
+		}
+	}
+	return Execution{}, false
 }
 
 // decodeExecution decodes an ExecutionSuccess or ExecutionFailure log. Safe

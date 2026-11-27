@@ -54,7 +54,7 @@ func limitNode(t *testing.T, limit uint64, status, code int, blocks ...BlockNumb
 		logs := []Log{}
 		for _, block := range blocks {
 			if filter.FromBlock <= block && block <= filter.ToBlock {
-				logs = append(logs, Log{BlockNumber: block})
+				logs = append(logs, Log{BlockNumber: block, Topics: []Hash{}})
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": logs})

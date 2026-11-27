@@ -80,8 +80,52 @@ func TestTransaction(t *testing.T) {
 		RefundReceiver: ethrpc.Address{19: 7},
 		Nonce:          big.NewInt(8),
 	}
-	if g, w := got.Hash(), want.Hash(); g != w {
-		t.Errorf("Transaction: got %+v with hash %s, want %+v with hash %s", got, g, want, w)
+	if g, w := got.Transaction.Hash(), want.Hash(); g != w {
+		t.Errorf("Transaction: got %+v with hash %s, want %+v with hash %s", got.Transaction, g, want, w)
+	}
+	// The service doesn't say that it was executed.
+	if got.Executed || got.TxHash != (ethrpc.Hash{}) || got.Block != 0 {
+		t.Errorf("Transaction: got execution %+v, want none", got)
+	}
+}
+
+func TestTransactionExecuted(t *testing.T) {
+	const fields = `"safe": "0x5afE000000000000000000000000000000000001",
+		"to": "0xa11ce00000000000000000000000000000000003",
+		"value": "0", "data": null, "operation": 0, "safeTxGas": 0, "baseGas": 0, "gasPrice": "0",
+		"gasToken": "0x0000000000000000000000000000000000000000",
+		"refundReceiver": "0x0000000000000000000000000000000000000000",
+		"nonce": 3,
+		"safeTxHash": "0x00000000000000000000000000000000000000000000000000000000000000ee"`
+	for _, test := range []struct {
+		name, execution string
+		want            Execution
+	}{
+		{
+			"executed",
+			`"isExecuted": true, "isSuccessful": false, "blockNumber": 26381211,
+			"transactionHash": "0x00000000000000000000000000000000000000000000000000000000000000bb"`,
+			Execution{SafeTxHash: ethrpc.Hash{31: 0xee}, TxHash: ethrpc.Hash{31: 0xbb}, Block: 26381211, Executed: true},
+		},
+		{
+			"not executed",
+			`"isExecuted": false, "isSuccessful": null, "blockNumber": null, "transactionHash": null`,
+			Execution{SafeTxHash: ethrpc.Hash{31: 0xee}},
+		},
+		// A transaction that the service doesn't say was executed isn't taken to be.
+		{"unknown", `"blockNumber": 26381211`, Execution{SafeTxHash: ethrpc.Hash{31: 0xee}, Block: 26381211}},
+	} {
+		got, err := serve(t, http.StatusOK, "{"+fields+", "+test.execution+"}").Transaction(t.Context(), hash)
+		if err != nil {
+			t.Fatalf("Transaction %s: %v", test.name, err)
+		}
+		if got.Transaction == nil || got.Transaction.Nonce.Int64() != 3 {
+			t.Errorf("Transaction %s: got transaction %+v, want nonce 3", test.name, got.Transaction)
+		}
+		got.Transaction = nil
+		if *got != test.want {
+			t.Errorf("Transaction %s: got %+v, want %+v", test.name, *got, test.want)
+		}
 	}
 }
 
@@ -98,8 +142,8 @@ func TestTransactionWithoutData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Transaction: %v", err)
 	}
-	if len(got.Data) != 0 {
-		t.Errorf("Transaction: got data %x, want none", got.Data)
+	if len(got.Transaction.Data) != 0 {
+		t.Errorf("Transaction: got data %x, want none", got.Transaction.Data)
 	}
 }
 
@@ -258,6 +302,9 @@ func serveExecutions(t *testing.T, safe ethrpc.Address, n int, broken ...int) *C
 				result["transactionHash"] = nil
 			case slices.Contains(broken, i-1):
 				result["blockNumber"] = nil
+			case i == 9:
+				// The listing is of executed transactions, so one that doesn't say is.
+				delete(result, "isExecuted")
 			}
 			results = append(results, result)
 		}
@@ -279,7 +326,7 @@ func TestExecutions(t *testing.T) {
 		t.Fatalf("Executions: got %d executions, want 150", len(got))
 	}
 	for i, x := range got {
-		want := Execution{SafeTxHash: ethrpc.Hash{0: 0x5a, 31: byte(i)}, TxHash: ethrpc.Hash{0: 0x7a, 31: byte(i)}, Block: uint64(1000 + i)}
+		want := Execution{SafeTxHash: ethrpc.Hash{0: 0x5a, 31: byte(i)}, TxHash: ethrpc.Hash{0: 0x7a, 31: byte(i)}, Block: uint64(1000 + i), Executed: true}
 		if i == 7 {
 			// It is listed without its onchain transaction, for the caller to report.
 			want.TxHash = ethrpc.Hash{}
@@ -287,7 +334,7 @@ func TestExecutions(t *testing.T) {
 		if i == 8 {
 			want.Block = 0
 		}
-		if x.SafeTxHash != want.SafeTxHash || x.TxHash != want.TxHash || x.Block != want.Block ||
+		if x.SafeTxHash != want.SafeTxHash || x.TxHash != want.TxHash || x.Block != want.Block || x.Executed != want.Executed ||
 			x.Transaction == nil || x.Transaction.Nonce.Int64() != int64(i) || x.Transaction.Safe != safe || x.Transaction.ChainID.Int64() != 1 {
 			t.Errorf("Executions[%d]: got %+v, want %+v with a transaction of nonce %d", i, x, want, i)
 		}
