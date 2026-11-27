@@ -333,8 +333,13 @@ func (d *decoder) byHash(i int, inputs []ethrpc.Bytes, nonces []*big.Int) map[et
 		for j := range nonces {
 			tx := *decoded
 			tx.Nonce = nonces[(next+j)%len(nonces)]
-			// The fields are ABI words, so they can be hashed before matches checks them.
-			if hash := tx.Hash(); logged[hash] && txs[hash] == nil && matches(&tx, hash) {
+			// The fields are ABI words, so they can be hashed before matches checks them. A
+			// Safe before 1.3.0 logs the hash in a domain without the chain ID.
+			hash := tx.Hash()
+			if !logged[hash] {
+				hash = tx.LegacyHash()
+			}
+			if logged[hash] && txs[hash] == nil && matches(&tx, hash) {
 				txs[hash], next = &tx, next+j+1
 				break
 			}

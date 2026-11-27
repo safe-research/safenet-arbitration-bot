@@ -862,6 +862,31 @@ func TestFindReturnsEmptyList(t *testing.T) {
 	}
 }
 
+func TestFindLegacyHash(t *testing.T) {
+	// A Safe on the 1.1.1 or 1.2.0 singleton logs the hashes of the transactions
+	// that it executes in a domain without the chain ID, and doesn't index them.
+	// The first is decoded from the calldata, and the second from the service.
+	viaCalldata, viaService := transaction("calldata", 10), transaction("service", 11)
+	c := &chain{
+		nonce: big.NewInt(12),
+		txs:   map[ethrpc.Hash]ethrpc.Transaction{hash(1): {To: &safe, Input: execCall(viaCalldata)}},
+		logs: []ethrpc.Log{
+			executionLog(executionSuccessEvent, viaCalldata.LegacyHash(), hash(1), false, 100, 0),
+			executionLog(executionSuccessEvent, viaService.LegacyHash(), hash(2), false, 110, 0),
+		},
+	}
+	f := &Finder{Eth: c.serve(t), Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{viaService.LegacyHash(): viaService})}
+	got, err := f.Find(t.Context(), safe, 0, 200)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	want := []Execution{executed(viaCalldata, hash(1), 100, SourceCalldata), executed(viaService, hash(2), 110, SourceService)}
+	for i := range want {
+		want[i].SafeTxHash = want[i].Transaction.LegacyHash()
+	}
+	checkExecutions(t, got, want)
+}
+
 // TestFindLeavesOutModules checks that Find asks the node for the Safe's
 // executions only, as it always has, so that its executions by modules don't
 // make the scans split their ranges.
@@ -951,8 +976,8 @@ func TestDecodeCall(t *testing.T) {
 
 func TestMatches(t *testing.T) {
 	tx := transaction("data", 5)
-	if !matches(tx, tx.Hash()) {
-		t.Error("matches: a transaction doesn't match its hash")
+	if !matches(tx, tx.Hash()) || !matches(tx, tx.LegacyHash()) {
+		t.Error("matches: a transaction doesn't match its hash, or its hash before Safe 1.3.0")
 	}
 	if matches(tx, hash(1)) || matches(nil, tx.Hash()) {
 		t.Error("matches: a transaction matches another hash, or nil matches")

@@ -11,6 +11,9 @@ var (
 	domainTypeHash              = typeHash("EIP712Domain(uint256 chainId,address verifyingContract)")
 	safeTxTypeHash              = typeHash("SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)")
 	transactionProposalTypeHash = typeHash("TransactionProposal(uint64 epoch,address oracle,bytes oracleData,bytes32 safeTxHash)")
+	// legacyDomainTypeHash is the domain of the Safe versions before 1.3.0, which
+	// has no chain ID.
+	legacyDomainTypeHash = typeHash("EIP712Domain(address verifyingContract)")
 )
 
 func typeHash(typ string) solabi.Word {
@@ -18,10 +21,25 @@ func typeHash(typ string) solabi.Word {
 }
 
 // Hash returns the EIP-712 hash of the transaction that the Safe's owners sign,
-// the Safe transaction hash.
+// the Safe transaction hash, as Safe 1.3.0 and later versions hash it, and
+// Safenet with them.
 func (tx *SafeTransaction) Hash() ethrpc.Hash {
 	domain := hashWords(domainTypeHash, solabi.Uint(tx.ChainID), solabi.Address(tx.Safe))
-	message := hashWords(
+	return typedDataHash(domain, tx.message())
+}
+
+// LegacyHash returns the Safe transaction hash as Safe 1.0.0, 1.1.1, and 1.2.0
+// hash it, in a domain without the chain ID. 1.1.1 and 1.2.0 log it when they
+// execute the transaction.
+func (tx *SafeTransaction) LegacyHash() ethrpc.Hash {
+	domain := hashWords(legacyDomainTypeHash, solabi.Address(tx.Safe))
+	return typedDataHash(domain, tx.message())
+}
+
+// message returns the hash of the transaction's SafeTx message, which Safe
+// 1.0.0 and later versions hash the same way.
+func (tx *SafeTransaction) message() solabi.Word {
+	return hashWords(
 		safeTxTypeHash,
 		solabi.Address(tx.To),
 		solabi.Uint(tx.Value),
@@ -34,7 +52,6 @@ func (tx *SafeTransaction) Hash() ethrpc.Hash {
 		solabi.Address(tx.RefundReceiver),
 		solabi.Uint(tx.Nonce),
 	)
-	return typedDataHash(domain, message)
 }
 
 // requestID returns the ID of the oracle request for a transaction proposal:

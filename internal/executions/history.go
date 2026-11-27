@@ -221,24 +221,28 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 
 // counted reports whether the Safe's nonce counts the executions found at the
 // end of each block where something else may have changed it: each block with
-// an execution found that is a delegate call, each of moduleBlocks, which have
-// an execution by a module, and to. There it must be one above the highest
-// nonce of the executions found up to the block, as executions leave it, or 0
-// if there are none, and, other than at to, whose nonce is the history's, the
-// Safe's singleton must be an official Safe singleton, whose nonce() is the
-// Safe's nonce. A delegate call or a module can set the nonce to anything,
-// which the nonces of the executions only show if both executions of a reused
-// nonce are found, and at to, after the last execution, not even then. A
-// delegate call to MultiSendCallOnly only makes calls, which, like an execution
-// that is a call, can only change the nonce through a module, whose executions
-// are only found in the blocks that FindAll reads, but an unknown execution may
-// be any delegate call. It warns about each block where the nonce or the
-// singleton isn't, once about those where it can't be read, such as at a block
-// whose state the node doesn't keep, and once about unknown executions. A read
-// that fails transiently, such as for a rate limit, returns its error instead,
-// since it says nothing about the nonce.
+// an execution found that is a delegate call, or that Safe 1.1.1 or 1.2.0
+// executed, each of moduleBlocks, which have an execution by a module, and to.
+// There it must be one above the highest nonce of the executions found up to
+// the block, as executions leave it, or 0 if there are none, and, other than at
+// to, whose nonce is the history's, the Safe's singleton must be an official
+// Safe singleton, whose nonce() is the Safe's nonce. A delegate call or a
+// module can set the nonce to anything, which the nonces of the executions only
+// show if both executions of a reused nonce are found, and at to, after the
+// last execution, not even then. From Safe 1.3.0 on, a delegate call to
+// MultiSendCallOnly only makes calls, which, like an execution that is a call,
+// can only change the nonce through a module, whose executions are only found
+// in the blocks that FindAll reads. Before 1.3.0, a call to the Safe itself can
+// also run changeMasterCopy, which replaces the singleton, so any execution
+// whose hash is that of 1.1.1 and 1.2.0 is checked. An unknown execution may be
+// any delegate call. It warns about each block where the nonce or the singleton
+// isn't, once about those where it can't be read, such as at a block whose
+// state the node doesn't keep, and once about unknown executions. A read that
+// fails transiently, such as for a rate limit, returns its error instead, since
+// it says nothing about the nonce.
 func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, error) {
 	delegateCalls := make(map[uint64]bool)
+	older := make(map[uint64]bool)
 	unknown := false
 	for _, e := range d.executions {
 		tx := e.Transaction
@@ -248,6 +252,9 @@ func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, err
 		}
 		if tx.Operation == safenet.OperationDelegateCall && !checks.MultiSendCallOnly(tx.To) {
 			delegateCalls[e.Block] = true
+		} else if tx.Hash() != e.SafeTxHash {
+			// It matched the older hash of Safe 1.1.1 and 1.2.0.
+			older[e.Block] = true
 		}
 	}
 	modules := make(map[uint64]bool)
@@ -261,6 +268,10 @@ func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, err
 			return "a delegate call and an execution by a module"
 		case delegateCalls[block]:
 			return "a delegate call"
+		case older[block] && modules[block]:
+			return "an execution by Safe 1.1.1 or 1.2.0 and an execution by a module"
+		case older[block]:
+			return "an execution by Safe 1.1.1 or 1.2.0"
 		}
 		return "an execution by a module"
 	}
@@ -280,7 +291,7 @@ func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, err
 		return new(big.Int).Add(highest, big.NewInt(1))
 	}
 
-	blocks := slices.Concat(slices.Collect(maps.Keys(delegateCalls)), moduleBlocks)
+	blocks := slices.Concat(slices.Collect(maps.Keys(delegateCalls)), slices.Collect(maps.Keys(older)), moduleBlocks)
 	slices.Sort(blocks)
 	blocks = slices.Compact(blocks)
 	counted, unread := true, 0
@@ -311,7 +322,7 @@ func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, err
 		}
 	}
 	if unread > 0 {
-		d.warn(fmt.Errorf("the Safe's nonce at the end of %d blocks with a delegate call or an execution by a module is unknown, so it may not count the executions", unread))
+		d.warn(fmt.Errorf("the Safe's nonce at the end of %d blocks with a delegate call, an execution by Safe 1.1.1 or 1.2.0, or an execution by a module is unknown, so it may not count the executions", unread))
 		counted = false
 	}
 	// The nonce at to is the history's, so it needs no read. A set-back after the
