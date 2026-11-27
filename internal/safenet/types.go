@@ -89,8 +89,8 @@ type Proposal struct {
 	Time  time.Time `json:"time"`
 	// EthereumBlock and SafeBlock are the last blocks before Time on Ethereum
 	// Mainnet and on the Safe's chain. Their state is what the proposal is judged
-	// against, without its own effects or later ones (Charter § 2.8 and § 3.6), and
-	// the Charter version to apply is the one at EthereumBlock.
+	// against, without anything later (Charter § 2.8 and § 3.6), and the Charter
+	// version to apply is the one at EthereumBlock.
 	EthereumBlock uint64 `json:"ethereumBlock"`
 	// EthereumBlockTime is the timestamp of EthereumBlock, and SafeBlockTime that
 	// of SafeBlock. A request file that arbot wrote before it reported them lacks

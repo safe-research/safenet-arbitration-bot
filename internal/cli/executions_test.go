@@ -360,6 +360,13 @@ func TestExecutionsProposalBefore130(t *testing.T) {
 			(got.Executions[0].Proposal != nil) != test.proposal {
 			t.Errorf("%s: got executions %+v, want the transaction from the service, the request's own: %t", test.name, got.Executions, test.proposal)
 		}
+		// The text output says that the request's own execution, before the proposal,
+		// is onchain data.
+		code, stdout, stderr = runArbot(t, "-config", config, "executions", "-all", "-request-file", request)
+		note := "\nThe execution in block 100, transaction " + hashOf(1).String() + ", is of the request's own Safe transaction, before the proposal, so it is onchain data (§ 2.8).\n"
+		if code != 0 || strings.Contains(stdout, note) != test.proposal || strings.Contains(stdout, "§ 3.6") {
+			t.Errorf("%s: got status %d and output\n%s%s\nwant the note on the request's own execution: %t", test.name, code, stdout, stderr, test.proposal)
+		}
 	}
 }
 

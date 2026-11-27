@@ -17,8 +17,7 @@ import (
 const defaultScanBlocks = 100_000
 
 // safeRef is the Safe of a request, and the block to read its chain at, as of
-// the proposal: the request's Safe block, without the transaction's own effects
-// or anything later.
+// the proposal: the request's Safe block, without anything later.
 type safeRef struct {
 	Safe    ethrpc.Address
 	ChainID uint64
