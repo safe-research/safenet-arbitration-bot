@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
@@ -554,19 +555,21 @@ func TestEnumUnmarshalText(t *testing.T) {
 }
 
 // TestRequestBlocks checks the blocks before proposals of Safe transactions on
-// another chain, on Gnosis Chain, and on Ethereum Mainnet. The Arbitrum and
-// Mainnet blocks were checked with cast: they are the last ones before the
-// proposal time, and the next Arbitrum block is at the proposal time.
+// another chain, on Gnosis Chain, and on Ethereum Mainnet, and their times. The
+// Arbitrum and Mainnet blocks were checked with cast: they are the last ones
+// before the proposal time, and the next Arbitrum block is at the proposal
+// time.
 func TestRequestBlocks(t *testing.T) {
 	tests := []struct {
-		name           string
-		id             ethrpc.Hash
-		ethereum, safe uint64
+		name                   string
+		id                     ethrpc.Hash
+		ethereum, safe         uint64
+		ethereumTime, safeTime string
 	}{
-		{"Arbitrum", frozenID, 26034967, 507875025},
+		{"Arbitrum", frozenID, 26034967, 507875025, "2026-09-22T18:59:11Z", "2026-09-22T18:59:19Z"},
 		// The Gnosis Chain block before the proposal block.
-		{"Gnosis Chain", insecureID, 26047854, 48415710},
-		{"Ethereum Mainnet", secureID, 26047997, 26047997},
+		{"Gnosis Chain", insecureID, 26047854, 48415710, "2026-09-24T14:16:59Z", "2026-09-24T14:17:00Z"},
+		{"Ethereum Mainnet", secureID, 26047997, 26047997, "2026-09-24T14:45:59Z", "2026-09-24T14:45:59Z"},
 	}
 	f := loadFixture(t)
 	sn := f.open(t)
@@ -580,6 +583,9 @@ func TestRequestBlocks(t *testing.T) {
 		if p.EthereumBlock != test.ethereum || p.SafeBlock != test.safe {
 			t.Errorf("Request(%s): got Ethereum block %d and Safe chain block %d before the proposal, want %d and %d",
 				test.name, p.EthereumBlock, p.SafeBlock, test.ethereum, test.safe)
+		}
+		if got, want := [2]string{p.EthereumBlockTime.Format(time.RFC3339), p.SafeBlockTime.Format(time.RFC3339)}, [2]string{test.ethereumTime, test.safeTime}; got != want {
+			t.Errorf("Request(%s): got the block times %v, want %v", test.name, got, want)
 		}
 	}
 }

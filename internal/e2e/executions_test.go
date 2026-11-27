@@ -31,6 +31,7 @@ type executionsOutput struct {
 
 type executionJSON struct {
 	Block       uint64                   `json:"block"`
+	BlockTime   time.Time                `json:"blockTime"`
 	TxHash      ethrpc.Hash              `json:"txHash"`
 	SafeTxHash  ethrpc.Hash              `json:"safeTxHash"`
 	Success     bool                     `json:"success"`
@@ -87,8 +88,8 @@ func TestExecutions(t *testing.T) {
 		}
 		receipt := mainnet.Transact(owner, to, n.ExecCalldata(&tx, sender))
 		return executionJSON{
-			Block: uint64(receipt.BlockNumber), TxHash: receipt.TransactionHash, SafeTxHash: tx.Hash(),
-			Success: success, Payment: new(big.Int), Source: source, Transaction: &tx,
+			Block: uint64(receipt.BlockNumber), BlockTime: mainnet.Header(uint64(receipt.BlockNumber)).Time(), TxHash: receipt.TransactionHash,
+			SafeTxHash: tx.Hash(), Success: success, Payment: new(big.Int), Source: source, Transaction: &tx,
 		}
 	}
 	zero := func(tx safenet.SafeTransaction) safenet.SafeTransaction {
@@ -282,7 +283,7 @@ func TestExecutions(t *testing.T) {
 			`(?m)^Safe transactions executed by ` + safe.String() + ` on chain 1, up to block \d+$`,
 			`(?m)^Nonce at block \d+: 4 \(complete\)$`,
 			fmt.Sprintf(`(?m)^Scanned blocks %d to %d for executions that the service doesn't list$`, viaCalldata.Block, failed.Block),
-			`(?m)^\d+ +` + viaTrace.TxHash.String() + ` +success +` + viaTrace.SafeTxHash.String() + ` +trace +1 +`,
+			`(?m)^\d+ +` + viaTrace.BlockTime.Format(time.RFC3339) + ` +` + viaTrace.TxHash.String() + ` +success +` + viaTrace.SafeTxHash.String() + ` +trace +1 +`,
 		} {
 			if !regexp.MustCompile(want).Match(text) {
 				t.Errorf("executions -all: output has no line matching %q:\n%s", want, text)
@@ -294,9 +295,9 @@ func TestExecutions(t *testing.T) {
 		text := arbot.Run(t, "executions", "-request-file", path)
 		for _, want := range []string{
 			`(?m)^Safe transactions executed by ` + safe.String() + ` on chain 1, in blocks 0 to \d+$`,
-			`(?m)^\d+ +` + viaCalldata.TxHash.String() + ` +success +` + viaCalldata.SafeTxHash.String() + ` +calldata +0 +` + target.String() + ` +0 +CALL +0x1234 \(2 bytes\)$`,
-			`(?m)^\d+ +` + viaTrace.TxHash.String() + ` +success +` + viaTrace.SafeTxHash.String() + ` +trace +1 +`,
-			`(?m)^\d+ +` + failed.TxHash.String() + ` +failure +` + failed.SafeTxHash.String() + ` +calldata +2 +` + reverter.String() + ` +0 +CALL +-$`,
+			`(?m)^\d+ +` + viaCalldata.BlockTime.Format(time.RFC3339) + ` +` + viaCalldata.TxHash.String() + ` +success +` + viaCalldata.SafeTxHash.String() + ` +calldata +0 +` + target.String() + ` +0 +CALL +0x1234 \(2 bytes\)$`,
+			`(?m)^\d+ +` + viaTrace.BlockTime.Format(time.RFC3339) + ` +` + viaTrace.TxHash.String() + ` +success +` + viaTrace.SafeTxHash.String() + ` +trace +1 +`,
+			`(?m)^\d+ +` + failed.BlockTime.Format(time.RFC3339) + ` +` + failed.TxHash.String() + ` +failure +` + failed.SafeTxHash.String() + ` +calldata +2 +` + reverter.String() + ` +0 +CALL +-$`,
 		} {
 			if !regexp.MustCompile(want).Match(text) {
 				t.Errorf("executions: output has no line matching %q:\n%s", want, text)
@@ -338,7 +339,8 @@ func TestExecutionsUnknown(t *testing.T) {
 	}
 
 	want := []executionJSON{{
-		Block: uint64(receipt.BlockNumber), TxHash: receipt.TransactionHash, SafeTxHash: tx.Hash(), Success: true, Payment: new(big.Int),
+		Block: uint64(receipt.BlockNumber), BlockTime: mainnet.Header(uint64(receipt.BlockNumber)).Time(), TxHash: receipt.TransactionHash,
+		SafeTxHash: tx.Hash(), Success: true, Payment: new(big.Int),
 	}}
 	var raw struct {
 		Executions []map[string]any `json:"executions"`
@@ -362,7 +364,7 @@ func TestExecutionsUnknown(t *testing.T) {
 	}
 
 	text := arbot.Run(t, "executions", "-request-file", path)
-	line := `(?m)^\d+ +` + receipt.TransactionHash.String() + ` +success +` + tx.Hash().String() + ` +- +unknown transaction$`
+	line := `(?m)^\d+ +` + want[0].BlockTime.Format(time.RFC3339) + ` +` + receipt.TransactionHash.String() + ` +success +` + tx.Hash().String() + ` +- +unknown transaction$`
 	if !regexp.MustCompile(line).Match(text) {
 		t.Errorf("executions: output has no line matching %q:\n%s", line, text)
 	}

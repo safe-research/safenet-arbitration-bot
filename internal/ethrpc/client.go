@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,13 @@ type Client struct {
 	url     string
 	http    *http.Client
 	id      atomic.Uint64
+
+	// times are the timestamps of the blocks that the client read, by number, so
+	// that BlockTime reads each block's header once. Commands ask for the times of
+	// blocks up to a request's Safe block, which are final or nearly so, so a
+	// reorganization that changes a timestamp while a command runs is left out.
+	mu    sync.Mutex
+	times map[BlockNumber]time.Time
 }
 
 // connectTimeout bounds how long NewClient waits for each default RPC node to
@@ -222,14 +230,51 @@ func (c *Client) GetTransactionReceipt(ctx context.Context, hash Hash) (Receipt,
 // GetBlockByNumber returns the header of the block with the given number
 // (eth_getBlockByNumber).
 func (c *Client) GetBlockByNumber(ctx context.Context, number BlockNumber) (Block, error) {
-	var result *Block
+	var result *struct {
+		Number    *BlockNumber `json:"number"`
+		Hash      Hash         `json:"hash"`
+		Timestamp *Quantity    `json:"timestamp"`
+	}
 	if err := c.RawRequest(ctx, &result, "eth_getBlockByNumber", number, false); err != nil {
 		return Block{}, err
 	}
 	if result == nil {
 		return Block{}, fmt.Errorf("eth_getBlockByNumber: block %d not found", number)
 	}
-	return *result, nil
+	// A header without them would give the block the time 0.
+	if result.Number == nil || result.Timestamp == nil {
+		return Block{}, fmt.Errorf("eth_getBlockByNumber: the header of block %d has no number or timestamp", number)
+	}
+	// Another block's header would give the block another block's time.
+	if *result.Number != number {
+		return Block{}, fmt.Errorf("eth_getBlockByNumber: the node returned block %d, not %d", *result.Number, number)
+	}
+	block := Block{Number: number, Hash: result.Hash, Timestamp: *result.Timestamp}
+	c.mu.Lock()
+	if c.times == nil {
+		c.times = make(map[BlockNumber]time.Time)
+	}
+	c.times[number] = block.Time()
+	c.mu.Unlock()
+	return block, nil
+}
+
+// BlockTime returns the timestamp of the block with the given number, in UTC.
+// It reads the block's header the first time that it or GetBlockByNumber is
+// asked for the block, and returns the same time after. The read isn't shared,
+// so calls at the same time for a block not read yet each read its header.
+func (c *Client) BlockTime(ctx context.Context, number BlockNumber) (time.Time, error) {
+	c.mu.Lock()
+	t, ok := c.times[number]
+	c.mu.Unlock()
+	if ok {
+		return t, nil
+	}
+	block, err := c.GetBlockByNumber(ctx, number)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return block.Time(), nil
 }
 
 // FinalizedBlock returns the header of the node's most recent finalized block

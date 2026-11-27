@@ -68,8 +68,8 @@ func TestExecutionsAll(t *testing.T) {
 		}
 		receipt := mainnet.Transact(owner, safe, n.ExecCalldata(&tx, owner))
 		x := executionJSON{
-			Block: uint64(receipt.BlockNumber), TxHash: receipt.TransactionHash, SafeTxHash: tx.Hash(),
-			Success: true, Payment: new(big.Int), Source: source, Transaction: &tx,
+			Block: uint64(receipt.BlockNumber), BlockTime: mainnet.Header(uint64(receipt.BlockNumber)).Time(), TxHash: receipt.TransactionHash,
+			SafeTxHash: tx.Hash(), Success: true, Payment: new(big.Int), Source: source, Transaction: &tx,
 		}
 		return x, e2e.TxServiceExecution{Transaction: &tx, SafeTxHash: tx.Hash(), TxHash: receipt.TransactionHash, Block: x.Block}
 	}
@@ -166,7 +166,7 @@ func TestExecutionsAll(t *testing.T) {
 	text := arbot.Run(t, "executions", "-all", "-request-file", path)
 	for _, want := range []string{
 		`(?m)^Missing nonces: none$`,
-		`(?m)^\d+ +` + first.TxHash.String() + ` +success +` + first.SafeTxHash.String() + ` +service +0 +` + target.String() + ` +0 +CALL +0x66697273 \(5 bytes\)$`,
+		`(?m)^\d+ +` + first.BlockTime.Format(time.RFC3339) + ` +` + first.TxHash.String() + ` +success +` + first.SafeTxHash.String() + ` +service +0 +` + target.String() + ` +0 +CALL +0x66697273 \(5 bytes\)$`,
 		`(?m)^3 +` + misreported.SafeTxHash.String() + ` +` + misreported.TxHash.String() + ` +the transaction's fields don't hash`,
 	} {
 		if !regexp.MustCompile(want).Match(text) {

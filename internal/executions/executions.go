@@ -30,6 +30,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -70,6 +71,9 @@ const (
 // Execution is a Safe transaction that a Safe executed.
 type Execution struct {
 	Block uint64 `json:"block"`
+	// BlockTime is the timestamp of Block. Find and FindAll leave it zero, for the
+	// caller to set.
+	BlockTime time.Time `json:"blockTime,omitzero"`
 	// TxHash is the hash of the onchain transaction that executed it, and LogIndex
 	// the index in its block of the log that says so.
 	TxHash   ethrpc.Hash `json:"txHash"`

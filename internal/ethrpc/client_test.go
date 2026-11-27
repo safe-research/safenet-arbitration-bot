@@ -352,6 +352,74 @@ func TestGetBlockByNumberNotFound(t *testing.T) {
 	}
 }
 
+// TestGetBlockByNumberWrongNumber checks that the header of another block than
+// the one asked for is rejected, so that its time isn't taken for the block's.
+func TestGetBlockByNumberWrongNumber(t *testing.T) {
+	client := serve(t,
+		`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x2625a00", false]}`,
+		`{"result": {"number": "0x2625a01", "hash": "0x00000000000000000000000000000000000000000000000000000000000000bb", "timestamp": "0x68d3a000"}}`,
+	)
+	if _, err := client.GetBlockByNumber(t.Context(), 40_000_000); err == nil || !strings.Contains(err.Error(), "returned block 40000001") {
+		t.Errorf("GetBlockByNumber: got %v, want an error for another block", err)
+	}
+	if _, err := client.BlockTime(t.Context(), 40_000_000); err == nil {
+		t.Error("BlockTime: expected an error for another block")
+	}
+}
+
+// TestGetBlockByNumberIncomplete checks that a header without its number or
+// timestamp is rejected, so that the block doesn't get the time 0, while a
+// timestamp of 0 is one.
+func TestGetBlockByNumberIncomplete(t *testing.T) {
+	for _, test := range []struct {
+		block  BlockNumber
+		header string
+		ok     bool
+	}{
+		{100, `{"number": "0x64"}`, false},
+		{100, `{"number": "0x64", "timestamp": null}`, false},
+		{0, `{"timestamp": "0x5"}`, false},
+		{0, `{"number": "0x0", "timestamp": "0x0"}`, true},
+	} {
+		client := serve(t,
+			fmt.Sprintf(`{"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["0x%x", false]}`, uint64(test.block)),
+			`{"result": `+test.header+`}`,
+		)
+		got, err := client.BlockTime(t.Context(), test.block)
+		if test.ok && (err != nil || !got.Equal(time.Unix(0, 0))) {
+			t.Errorf("BlockTime(%d) of header %s: got %s, %v; want the time 0", test.block, test.header, got, err)
+		}
+		if !test.ok && err == nil {
+			t.Errorf("BlockTime(%d) of header %s: got %s; want an error", test.block, test.header, got)
+		}
+	}
+}
+
+// TestBlockTime checks that BlockTime reads each block's header once, also
+// after GetBlockByNumber read it.
+func TestBlockTime(t *testing.T) {
+	client, fetched := blockNode(t, 30, func(i uint64) uint64 { return 1_700_000_000 + 12*i })
+	if _, err := client.GetBlockByNumber(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []BlockNumber{10, 20, 10, 20} {
+		got, err := client.BlockTime(t.Context(), n)
+		if err != nil {
+			t.Fatalf("BlockTime(%d): %v", n, err)
+		}
+		if want := time.Unix(1_700_000_000+12*int64(n), 0).UTC(); !got.Equal(want) || got.Location() != time.UTC {
+			t.Errorf("BlockTime(%d): got %s, want %s", n, got, want)
+		}
+	}
+	if got := fetched.Load(); got != 2 {
+		t.Errorf("BlockTime: the node was asked for %d headers, want 2", got)
+	}
+	// A block that the node doesn't have fails, and isn't read as a time.
+	if _, err := client.BlockTime(t.Context(), 30); err == nil {
+		t.Error("BlockTime(30): expected an error for a block that the node doesn't have")
+	}
+}
+
 func TestGetTransactionByHash(t *testing.T) {
 	client := serve(t,
 		`{"jsonrpc": "2.0", "method": "eth_getTransactionByHash", "params": ["0x00000000000000000000000000000000000000000000000000000000000000cc"]}`,
