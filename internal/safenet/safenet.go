@@ -270,15 +270,34 @@ func (s *session) request(ctx context.Context, id ethrpc.Hash) (*Request, error)
 	request.DisputedRules = DisputedRules(request.Votes)
 
 	if progress.arbitrationDeadline != 0 {
-		timeout, err := s.callUint64(ctx, block, arbitrationTimeoutSelector)
-		if err != nil {
-			return nil, err
-		}
-		if request.Arbitration, err = s.arbitration(ctx, id, request.State, progress.arbitrationDeadline, timeout, block); err != nil {
+		if request.Arbitration, err = s.arbitration(ctx, id, request.State, progress.arbitrationDeadline, block); err != nil {
 			return nil, err
 		}
 	}
 	return request, nil
+}
+
+// Progress returns the state, the terms, and the arbitration of the request
+// with the given ID as of the latest block, for a caller that has the rest of
+// the request, as arbot info wrote it, and needs what can have changed since.
+// It returns an error wrapping ErrRequestNotFound if the oracle has no request
+// with the ID.
+func (s *Safenet) Progress(ctx context.Context, id ethrpc.Hash) (*Progress, error) {
+	q, err := s.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	request, progress, err := q.getRequest(ctx, id, q.block)
+	if err != nil {
+		return nil, err
+	}
+	p := &Progress{Block: uint64(q.block), State: request.State, Terms: request.Terms}
+	if progress.arbitrationDeadline != 0 {
+		if p.Arbitration, err = q.arbitration(ctx, id, request.State, progress.arbitrationDeadline, q.block); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
 }
 
 // progress is the part of the oracle's record of a request that Request checks
@@ -556,7 +575,11 @@ var outcomeStates = map[Outcome]State{
 // arbitration returns the arbitration of the frozen request id, as of block.
 // The request was frozen in the block ARBITRATION_TIMEOUT blocks before its
 // deadline, and a request that is no longer frozen was settled after that.
-func (s *session) arbitration(ctx context.Context, id ethrpc.Hash, state State, deadline, timeout uint64, block ethrpc.BlockNumber) (*Arbitration, error) {
+func (s *session) arbitration(ctx context.Context, id ethrpc.Hash, state State, deadline uint64, block ethrpc.BlockNumber) (*Arbitration, error) {
+	timeout, err := s.callUint64(ctx, block, arbitrationTimeoutSelector)
+	if err != nil {
+		return nil, err
+	}
 	if timeout > deadline {
 		return nil, fmt.Errorf("request %s: arbitration deadline %d is before ARBITRATION_TIMEOUT %d", id, deadline, timeout)
 	}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,8 +17,9 @@ import (
 
 // TestStatus runs `arbot status` against real Safe 1.3.0 contracts on anvil,
 // for requests whose Safe transactions were executed on Ethereum Mainnet after
-// their proposals on Gnosis Chain, one of them by a delegate call that sets the
-// Safe's nonce back, or before the proposal, in the Safe block, or not at all.
+// their proposals on Gnosis Chain, one of them during a voting that was then
+// frozen and ruled on, and one by a delegate call that sets the Safe's nonce
+// back, or before the proposal, in the Safe block, or not at all.
 func TestStatus(t *testing.T) {
 	t.Parallel()
 	n := e2e.NewTestnet(t)
@@ -74,11 +76,14 @@ func TestStatus(t *testing.T) {
 		}
 	}
 
-	// The first request's transaction is executed a second after its proposal.
+	// The first request's transaction is executed a second after its proposal, and
+	// the sentinels then split on it, and the arbitrator rules it secure.
 	first := n.ProposeTransaction(safeTx(0, "first"))
 	proposed := n.Header(first.Block).Time()
 	n.SetupSafe(mainnet, first.Transaction.Safe, a.SafeSingleton, owner)
 	executed := execAt(first.Transaction, proposed.Add(time.Second))
+	n.Vote(first.Approve(a.Sentinels[0]), first.Deny(a.Sentinels[1], "R-4.1"))
+	first.Resolve(true, "Secure.")
 	firstPath := requestFile(first)
 
 	t.Run("executed after the proposal", func(t *testing.T) {
@@ -97,6 +102,41 @@ func TestStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("timing", func(t *testing.T) {
+		got := statusOf(arbot, firstPath)
+		timing := got.Timing
+		if got.State != safenet.StateResolvedApproved || timing == nil || timing.Value != status.DuringVoting {
+			t.Fatalf("status: got state %s and timing %+v, want RESOLVED_APPROVED, executed during the voting", got.State, timing)
+		}
+		// at checks that a point is the Gnosis Chain block, at its time.
+		at := func(name string, got status.Point, block uint64) {
+			t.Helper()
+			if got.Block != block || !got.Time.Equal(n.Header(block).Time()) {
+				t.Errorf("status: got %s %+v, want Gnosis Chain block %d at %s", name, got, block, n.Header(block).Time())
+			}
+		}
+		at("proposal", timing.Proposal, first.Block)
+		at("now", timing.Now, timing.Now.Block)
+		if timing.Frozen == nil || timing.Resolved == nil || timing.Resolved.Outcome != safenet.OutcomeSecure {
+			t.Fatalf("status: got freeze %+v and settlement %+v, want both, secure", timing.Frozen, timing.Resolved)
+		}
+		at("freeze", *timing.Frozen, first.FrozenBlock)
+		at("settlement", timing.Resolved.Point, uint64(first.Record.BlockNumber))
+		for _, d := range []struct {
+			name  string
+			got   status.Deadline
+			block uint64
+		}{{"commit deadline", timing.CommitDeadline, first.CommitDeadline}, {"reveal deadline", timing.RevealDeadline, first.RevealDeadline}} {
+			if reached := d.block <= timing.Now.Block; d.got.Block != d.block || d.got.Reached != reached || reached != (d.got.Time != nil) ||
+				reached && !d.got.Time.Equal(n.Header(d.block).Time()) {
+				t.Errorf("status: got %s %+v, want block %d, reached by block %d: %t", d.name, d.got, d.block, timing.Now.Block, reached)
+			}
+		}
+		if x := timing.Execution; x.Block != uint64(executed.BlockNumber) || !x.Time.Equal(proposed.Add(time.Second)) {
+			t.Errorf("status: got execution %+v, want block %d a second after the proposal", x, executed.BlockNumber)
+		}
+	})
+
 	t.Run("executed after the proposal, from the service", func(t *testing.T) {
 		service := e2e.NewTxService(t)
 		service.ListExecutions(e2e.TxServiceExecution{
@@ -112,11 +152,14 @@ func TestStatus(t *testing.T) {
 	t.Run("text", func(t *testing.T) {
 		text := arbot.Run(t, "status", "-request-file", firstPath)
 		for _, want := range []string{
-			`(?m)^Status of the Safe transaction of request ` + first.ID.String() + `$`,
+			`(?m)^Status of the Safe transaction of request ` + first.ID.String() + `, RESOLVED_APPROVED as of Gnosis Chain block \d+$`,
 			`(?m)^` + regexp.QuoteMeta(status.NotEvidence) + `$`,
 			`(?m)^  Status +executed$`,
 			`(?m)^  Executed +block \d+ \(` + proposed.Add(time.Second).Format(time.RFC3339) + `\), transaction ` + executed.TransactionHash.String() + `, success$`,
 			`(?m)^  Service +none for chain 1$`,
+			`(?m)^Timing: during-voting$`,
+			`(?m)^  Frozen +Gnosis Chain block ` + strconv.FormatUint(first.FrozenBlock, 10) + ` +\S+Z$`,
+			`(?m)^  Resolved +Gnosis Chain block ` + strconv.FormatUint(uint64(first.Record.BlockNumber), 10) + ` +\S+Z \(secure\)$`,
 		} {
 			if !regexp.MustCompile(want).Match(text) {
 				t.Errorf("status: output has no line matching %q:\n%s", want, text)
@@ -171,6 +214,10 @@ func TestStatus(t *testing.T) {
 		// itself after it too, up to the latest block.
 		if x := got.Execution.Scanned; x == nil || x.ToBlock != got.Nonce.LatestBlock {
 			t.Errorf("status: got blocks %+v scanned, want those up to the latest block %d", x, got.Nonce.LatestBlock)
+		}
+		if timing := got.Timing; got.State != safenet.StatePending || timing == nil || timing.Value != status.BeforeProposal ||
+			timing.Execution.Block != got.SafeBlock || timing.Frozen != nil || timing.Resolved != nil {
+			t.Errorf("status: got state %s and timing %+v, want PENDING, executed before the proposal, in the Safe block", got.State, timing)
 		}
 	})
 
