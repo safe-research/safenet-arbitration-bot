@@ -2,6 +2,7 @@ package checks
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/big"
 
@@ -17,6 +18,9 @@ type transactionComponents struct {
 	// them, followed by a synthetic call that pays the largest gas refund that the
 	// transaction allows, if it has one. See gasRefund.
 	calls []call
+	// unexpanded is whether the first of calls is the Safe transaction's own call,
+	// as it is, since expandTransactionCalls can't expand one of its batches.
+	unexpanded bool
 }
 
 // safeID identifies the Safe that makes a transaction's calls.
@@ -52,10 +56,27 @@ func (c call) equal(o call) bool {
 		c.kind == o.kind
 }
 
-// components returns the components of a Safe transaction. It returns an error
-// if the transaction is missing an amount, as a request read from a file can
-// be, rather than take it to be zero.
-func components(tx *safenet.SafeTransaction) (*transactionComponents, error) {
+// components returns the components of a Safe transaction, whose MultiSend
+// calls it expands with the contracts that identified finds. It returns an
+// error if the transaction is missing an amount, as checkAmounts does.
+func components(ctx context.Context, tx *safenet.SafeTransaction, identified identifier) (*transactionComponents, error) {
+	if err := checkAmounts(tx); err != nil {
+		return nil, err
+	}
+	safe := safeID{address: tx.Safe, chainID: tx.ChainID}
+	calls, unexpanded, err := expandTransactionCalls(ctx, tx, identified)
+	if err != nil {
+		return nil, err
+	}
+	if refund, ok := gasRefund(tx); ok {
+		calls = append(calls, refund)
+	}
+	return &transactionComponents{safe: safe, calls: calls, unexpanded: unexpanded}, nil
+}
+
+// checkAmounts returns an error if a Safe transaction is missing an amount, as
+// a request read from a file can be, rather than take it to be zero.
+func checkAmounts(tx *safenet.SafeTransaction) error {
 	for _, amount := range []struct {
 		name  string
 		value *big.Int
@@ -67,15 +88,10 @@ func components(tx *safenet.SafeTransaction) (*transactionComponents, error) {
 		{"gasPrice", tx.GasPrice},
 	} {
 		if amount.value == nil {
-			return nil, fmt.Errorf("safe transaction has no %s", amount.name)
+			return fmt.Errorf("safe transaction has no %s", amount.name)
 		}
 	}
-	safe := safeID{address: tx.Safe, chainID: tx.ChainID}
-	calls := expandTransactionCalls(tx)
-	if refund, ok := gasRefund(tx); ok {
-		calls = append(calls, refund)
-	}
-	return &transactionComponents{safe: safe, calls: calls}, nil
+	return nil
 }
 
 // transferSelector is the selector of ERC-20's transfer(address,uint256), with

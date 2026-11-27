@@ -315,7 +315,7 @@ func cutShort(data []byte, length int) ethrpc.Bytes {
 // TestDecodeBatchPadding decodes the last transaction of a batch that runs past
 // its end with the zeros that the contracts read there, such as a transfer
 // whose amount's last zero bytes the batch leaves out, but only up to
-// maxPadding zeros in all for one Decode: 40 batches that each claim
+// multisend.MaxPadding zeros in all for one Decode: 40 batches that each claim
 // MaxDataLength bytes of data take kilobytes, not 40 times 16 MiB, and their
 // transactions aren't decoded.
 func TestDecodeBatchPadding(t *testing.T) {
@@ -332,8 +332,8 @@ func TestDecodeBatchPadding(t *testing.T) {
 	}
 
 	// The zeros of all of the batches count, so the first transaction that needs
-	// maxPadding of them is decoded, and the second isn't.
-	full := cutShort(transfer, len(transfer)+maxPadding)
+	// multisend.MaxPadding of them is decoded, and the second isn't.
+	full := cutShort(transfer, len(transfer)+multisend.MaxPadding)
 	f = Decode(multiSend(
 		multisend.Transaction{Operation: safenet.OperationCall, To: token, Value: new(big.Int), Data: full},
 		multisend.Transaction{Operation: safenet.OperationCall, To: token, Value: new(big.Int), Data: full},
@@ -342,8 +342,8 @@ func TestDecodeBatchPadding(t *testing.T) {
 		t.Fatal("Decode of two batches: got nil")
 	}
 	if first, second := f.Args[0].Batch[0].Function.Args[0].Batch[0], f.Args[0].Batch[1].Function.Args[0].Batch[0]; first.Function == nil ||
-		first.Function.Name != "transfer" || second.Function != nil || second.DataLength != uint64(len(transfer)+maxPadding) {
-		t.Errorf("two batches with %d zeros each: got functions %v and %v, want transfer and none", maxPadding, first.Function, second.Function)
+		first.Function.Name != "transfer" || second.Function != nil || second.DataLength != uint64(len(transfer)+multisend.MaxPadding) {
+		t.Errorf("two batches with %d zeros each: got functions %v and %v, want transfer and none", multisend.MaxPadding, first.Function, second.Function)
 	}
 
 	padded := cutShort(nil, multisend.MaxDataLength)

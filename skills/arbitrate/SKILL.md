@@ -27,6 +27,7 @@ The directory holds these files, where `<n>` counts the `prosecutor`'s runs from
 | `charter-summary.md` | `charter-summarizer` | the summary of the Charter |
 | `disputed-rules.md` | you | the disputed rules, and the votes that cite each one |
 | `classification.json` | `arbot classify` | the deterministic classification |
+| `calls.json` | `arbot calls -json` | the calls that the Safe transaction makes |
 | `evidence.md` | `detective` | the evidence report, updated in each round |
 | `evidence-requests-<n>.md` | `prosecutor` | the facts that its `<n>`th run asked for |
 | `case-<n>.md` | `prosecutor` | the case of its `<n>`th run |
@@ -45,7 +46,8 @@ Tell each sub-agent the paths it reads and the path it writes, and that it write
 5. **Classify the request**: `.msgboard/bin/arbot classify -json -request-file .msgboard/<short-id>/request.json > .msgboard/<short-id>/classification.json`. The checks run under every rule, so:
    - if its `verdict` is `insecure` and its `rule` is disputed, or it is `secure`, the checks decided the request: go to [Report](#report);
    - otherwise, such as for `null`, or `insecure` under a rule that isn't disputed, they didn't. `arbot classify` reports only the first check that matches, so a check of a disputed rule may match too.
-6. **Build and review a case**, as below, then go to [Report](#report).
+6. **List the calls**: `.msgboard/bin/arbot calls -json -request-file .msgboard/<short-id>/request.json > .msgboard/<short-id>/calls.json`. If its root call has the `placeholder` `unexpanded`, `arbot` couldn't expand the transaction's batches within its bounds (more than 8 levels deep, more than 64 KiB of zeros, or `multiSend` arguments that don't decode), so the calls that it makes are unknown: stop, and tell the user that the request goes to the Council without a draft ruling, and why.
+7. **Build and review a case**, as below, then go to [Report](#report).
 
 ## Building a Case
 

@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"math/big"
+	"slices"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/multisend"
@@ -88,78 +89,177 @@ var invalidMultiSendCheck = check{
 	},
 }
 
+// identifier reports whether the contract that multiSends has at address is
+// identified there, as CallReader.Account identifies it: on a network that the
+// Charter covers, with code at the SafeBlock.
+type identifier func(ctx context.Context, address ethrpc.Address) (bool, error)
+
+// identifier returns an identifier of the contracts of multiSends on the chain
+// with chainID at env's block. It reads each address once.
+func (e *env) identifier(chainID *big.Int) identifier {
+	hasCode := map[ethrpc.Address]bool{}
+	return func(ctx context.Context, address ethrpc.Address) (bool, error) {
+		if !chainID.IsUint64() || !slices.Contains(networks, chainID.Uint64()) {
+			return false, nil
+		}
+		if has, ok := hasCode[address]; ok {
+			return has, nil
+		}
+		client, err := e.dial(ctx, chainID.Uint64())
+		if err != nil {
+			return false, err
+		}
+		code, err := client.GetCode(ctx, address, ethrpc.BlockNumber(e.block))
+		if err != nil {
+			return false, err
+		}
+		hasCode[address] = len(code) > 0
+		return hasCode[address], nil
+	}
+}
+
+// maxNesting is how many levels of MultiSend batches expandTransactionCalls
+// expands. A transaction that Safe's tools build has one, while each level of a
+// crafted one takes 153 bytes and copies the data of the levels below it.
+const maxNesting = 8
+
+// outcome is what expandMultiSendCall finds that a call does.
+type outcome uint8
+
+const (
+	// expanded means that the call makes the calls returned.
+	expanded outcome = iota
+	// reverts means that the call reverts whatever the state it runs in.
+	reverts
+	// unexpanded means that the call has a batch that expandMultiSendCall can't
+	// expand.
+	unexpanded
+)
+
 // expandTransactionCalls returns the calls that a Safe makes when it makes the
 // call of tx, with delegate calls to MultiSend and MultiSendCallOnly replaced
 // by the calls that they make, recursively. If the call reverts whatever the
 // state it runs in, it returns revertingMultiSend of the call's target in place
 // of them, and if it makes no calls, it returns emptyMultiSend of the call's
-// target, so that there is always at least one call.
+// target, so that there is always at least one call. It returns an error if
+// identified does.
 //
-// Calls that it can't decode are left as they are. It decodes the calls that a
-// MultiSend makes as the contract does, with multisend.Decode, following the
-// version of the contract:
+// It returns the call of tx as it is, and true, if it can't expand one of its
+// batches: if the batches nest more than maxNesting levels deep, if their
+// transactions run past the end of their batches by more than
+// multisend.MaxPadding zero bytes in all, or if the arguments of a call to
+// multiSend don't decode. It doesn't return the calls of the other batches,
+// since that batch can make the call revert, but a call that reverts anyway,
+// such as on another transaction of the batch, still reverts.
+//
+// It decodes the calls that a MultiSend makes as the contract does, with
+// multisend.Decode, following the version of the contract:
 //
 //   - The contract has no fallback, so any call to it other than one to
 //     multiSend reverts.
 //   - MultiSend reverts unless it is delegate called. MultiSendCallOnly makes
 //     its calls itself when it is called, rather than the Safe, so they are
-//     left as a single call to it.
+//     left as a single call to it, unless the call reverts. A call to its
+//     address reverts only if identified finds the contract there, since a call
+//     to an address without code succeeds.
 //   - MultiSendCallOnly reverts on a transaction that is a delegate call.
 //   - Since 1.5.0, the zero address means the Safe itself.
 //   - It reverts if any of its calls fails, so a call that reverts makes it
 //     revert too.
-func expandTransactionCalls(tx *safenet.SafeTransaction) []call {
-	calls, reverts := expandMultiSendCall(tx.Safe, call{to: tx.To, value: tx.Value, data: tx.Data, operation: tx.Operation})
-	if reverts {
-		return []call{revertingMultiSend(tx.To)}
+func expandTransactionCalls(ctx context.Context, tx *safenet.SafeTransaction, identified identifier) ([]call, bool, error) {
+	own := call{to: tx.To, value: tx.Value, data: tx.Data, operation: tx.Operation}
+	padding := multisend.MaxPadding
+	calls, result, err := expandMultiSendCall(ctx, tx.Safe, own, 0, &padding, identified)
+	switch {
+	case err != nil:
+		return nil, false, err
+	case result == reverts:
+		return []call{revertingMultiSend(tx.To)}, false, nil
+	case result == unexpanded:
+		return []call{own}, true, nil
+	case len(calls) == 0:
+		return []call{emptyMultiSend(tx.To)}, false, nil
 	}
-	if len(calls) == 0 {
-		return []call{emptyMultiSend(tx.To)}
-	}
-	return calls
+	return calls, false, nil
 }
 
 // expandMultiSendCall returns the calls that the Safe at safe makes when it
-// makes c, as expandTransactionCalls does, or true if c reverts.
-func expandMultiSendCall(safe ethrpc.Address, c call) ([]call, bool) {
+// makes c, at nesting level depth, as expandTransactionCalls does, with padding
+// the zero bytes that it can still add to batch transactions.
+func expandMultiSendCall(
+	ctx context.Context, safe ethrpc.Address, c call, depth int, padding *int, identified identifier,
+) ([]call, outcome, error) {
 	ms, ok := multiSends[c.to]
 	if !ok {
-		return []call{c}, false
+		return []call{c}, expanded, nil
 	}
 	if len(c.data) < 4 || [4]byte(c.data[:4]) != multiSendSelector {
-		return nil, true
+		return nil, reverts, nil
 	}
 	if c.operation == safenet.OperationCall && !ms.callOnly {
-		return nil, true
+		return nil, reverts, nil
 	}
-	if c.operation != safenet.OperationDelegateCall {
-		return []call{c}, false
+	if c.operation != safenet.OperationCall && c.operation != safenet.OperationDelegateCall {
+		return []call{c}, expanded, nil
+	}
+	if c.operation == safenet.OperationCall {
+		there, err := identified(ctx, c.to)
+		if err != nil {
+			return nil, expanded, err
+		}
+		if !there {
+			return []call{c}, expanded, nil
+		}
+	}
+	if depth >= maxNesting {
+		return nil, unexpanded, nil
 	}
 
 	d := solabi.NewDecoder(c.data[4:])
 	batch := d.Bytes(0)
 	if d.Err() != nil {
-		return []call{c}, false
+		return nil, unexpanded, nil
 	}
 	transactions, ok := multisend.Decode(batch)
 	if !ok {
-		return nil, true
+		return nil, reverts, nil
+	}
+	if ms.callOnly && slices.ContainsFunc(transactions, func(tx multisend.Transaction) bool {
+		return tx.Operation != safenet.OperationCall
+	}) {
+		return nil, reverts, nil
+	}
+	if c.operation == safenet.OperationCall {
+		return []call{c}, expanded, nil
 	}
 	var calls []call
+	result := expanded
 	for _, tx := range transactions {
-		if ms.callOnly && tx.Operation != safenet.OperationCall {
-			return nil, true
+		// A transaction with zeros runs past the end of the batch, so it is the last.
+		data, ok := tx.PaddedData(padding)
+		if !ok {
+			return nil, unexpanded, nil
 		}
 		to := tx.To
 		if to == (ethrpc.Address{}) && ms.version == "1.5.0" {
 			to = safe
 		}
-		sub := call{to: to, value: tx.Value, data: tx.FullData(), operation: tx.Operation, kind: Batched}
-		subCalls, reverts := expandMultiSendCall(safe, sub)
-		if reverts {
-			return nil, true
+		sub := call{to: to, value: tx.Value, data: data, operation: tx.Operation, kind: Batched}
+		subCalls, subResult, err := expandMultiSendCall(ctx, safe, sub, depth+1, padding, identified)
+		if err != nil {
+			return nil, expanded, err
+		}
+		switch subResult {
+		case reverts:
+			return nil, reverts, nil
+		case unexpanded:
+			// A later transaction can still make the batch revert.
+			result = unexpanded
 		}
 		calls = append(calls, subCalls...)
 	}
-	return calls, false
+	if result == unexpanded {
+		return nil, unexpanded, nil
+	}
+	return calls, expanded, nil
 }

@@ -99,3 +99,18 @@ func TestFullData(t *testing.T) {
 		t.Errorf("FullData() = %s, want 0x120000", got)
 	}
 }
+
+func TestPaddedData(t *testing.T) {
+	tx := Transaction{Data: ethrpc.Bytes{0x12}, DataLength: 3}
+	padding := 2
+	if got, ok := tx.PaddedData(&padding); !ok || !bytes.Equal(got, []byte{0x12, 0, 0}) || padding != 0 {
+		t.Errorf("PaddedData() with 2 zeros left = %s, %t, %d left; want 0x120000, true, 0 left", got, ok, padding)
+	}
+	if got, ok := tx.PaddedData(&padding); ok || padding != 0 {
+		t.Errorf("PaddedData() with no zeros left = %s, %t, %d left; want false, 0 left", got, ok, padding)
+	}
+	whole := Transaction{Data: ethrpc.Bytes{0x12}, DataLength: 1}
+	if got, ok := whole.PaddedData(&padding); !ok || !bytes.Equal(got, whole.Data) || padding != 0 {
+		t.Errorf("PaddedData() without zeros = %s, %t, %d left; want 0x12, true, 0 left", got, ok, padding)
+	}
+}

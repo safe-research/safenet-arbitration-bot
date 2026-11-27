@@ -17,6 +17,18 @@ import (
 // Charter covers.
 const MaxDataLength = 1 << 24
 
+// MaxPadding is how many zero bytes the decoders of nested batches, the package
+// functions and the checks, add in all to the data of batch transactions that
+// run past the end of their batch, which the contracts read as zeros. A batch
+// that Safe's tools build has none, and a call that a batch cuts short only
+// misses its last bytes, such as the zero bytes at the end of an amount, while
+// each transaction of a crafted batch can claim up to MaxDataLength, 16 MiB, of
+// them. 64 KiB is 2,048 words, far more than the 10 words of the longest head
+// of the functions that the package functions decodes, execTransaction's, and
+// bounds what a decoder allocates for zeros to 64 KiB for any call data, rather
+// than 16 MiB for each batch.
+const MaxPadding = 64 << 10
+
 // Transaction is a transaction of a batch. Since 1.5.0, the contracts take the
 // zero address as To to mean the account that runs the batch, such as the Safe
 // that delegate calls MultiSend.
@@ -37,6 +49,21 @@ func (tx Transaction) FullData() ethrpc.Bytes {
 	data := make(ethrpc.Bytes, tx.DataLength)
 	copy(data, tx.Data)
 	return data
+}
+
+// PaddedData returns the data that the contracts call with, as FullData does,
+// if its zeros fit in padding, the zeros that a decoder can still add, and
+// takes them from it. It returns false if they don't fit.
+func (tx Transaction) PaddedData(padding *int) (ethrpc.Bytes, bool) {
+	zeros := int(tx.DataLength) - len(tx.Data)
+	if zeros == 0 {
+		return tx.Data, true
+	}
+	if zeros > *padding {
+		return nil, false
+	}
+	*padding -= zeros
+	return tx.FullData(), true
 }
 
 // Decode returns the transactions of batch, the argument of multiSend, as the

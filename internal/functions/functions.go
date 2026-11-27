@@ -134,17 +134,6 @@ func init() {
 // maxDepth is how many levels of nested call data Decode decodes.
 const maxDepth = 8
 
-// maxPadding is how many zero bytes Decode adds in all to the data of batch
-// transactions that run past the end of their batch, which the contracts read
-// as zeros. A batch that Safe's tools build has none, and a call that a batch
-// cuts short only misses its last bytes, such as the zero bytes at the end of
-// an amount, while each transaction of a crafted batch can claim up to
-// multisend.MaxDataLength, 16 MiB, of them. 64 KiB is 2,048 words, far more
-// than the 10 words of the longest head of these functions, execTransaction's,
-// and bounds what Decode allocates for zeros to 64 KiB for any call data,
-// rather than 16 MiB for each batch.
-const maxPadding = 64 << 10
-
 // Decode decodes call data as one of the well-known functions, and the data of
 // the calls that it makes as well-known functions, if they are. It returns nil
 // if the data isn't one, or has a well-known selector but arguments that don't
@@ -154,11 +143,11 @@ const maxPadding = 64 << 10
 // that runs it can still revert, such as MultiSendCallOnly on a delegate call.
 //
 // The data of a batch transaction that runs past the end of its batch is
-// decoded followed by the zeros that the contracts read, up to maxPadding zero
-// bytes in all, and a transaction whose zeros would go over it is left
-// undecoded.
+// decoded followed by the zeros that the contracts read, up to
+// multisend.MaxPadding zero bytes in all, and a transaction whose zeros would
+// go over it is left undecoded.
 func Decode(calldata []byte) *Function {
-	padding := maxPadding
+	padding := multisend.MaxPadding
 	return decode(calldata, 0, &padding)
 }
 
@@ -229,15 +218,11 @@ func decode(calldata []byte, depth int, padding *int) *Function {
 // followed by zeros up to its DataLength, if those zeros fit in padding, and
 // takes them from it.
 func decodeTransaction(tx multisend.Transaction, depth int, padding *int) *Function {
-	zeros := int(tx.DataLength) - len(tx.Data)
-	if zeros == 0 {
-		return decode(tx.Data, depth, padding)
-	}
-	if zeros > *padding {
+	data, ok := tx.PaddedData(padding)
+	if !ok {
 		return nil
 	}
-	*padding -= zeros
-	return decode(tx.FullData(), depth, padding)
+	return decode(data, depth, padding)
 }
 
 // zeroAddress reports whether args has an argument named name that is the zero

@@ -140,14 +140,19 @@ func Classify(ctx context.Context, dial ethrpc.Dialer, request *safenet.Request)
 // verdictOrder. It returns an error if the proposal has no SafeBlock, as a
 // request read from a file can lack, rather than read the genesis state.
 func classify(ctx context.Context, checks []check, dial ethrpc.Dialer, request *safenet.Request) (Classification, error) {
-	tx, err := components(&request.Proposal.Transaction)
-	if err != nil {
+	transaction := &request.Proposal.Transaction
+	// A malformed transaction is an error before anything is read.
+	if err := checkAmounts(transaction); err != nil {
 		return Classification{}, err
 	}
 	if request.Proposal.SafeBlock == 0 {
 		return Classification{}, errors.New("proposal has no safeBlock")
 	}
 	env := &env{dial: dial, block: request.Proposal.SafeBlock}
+	tx, err := components(ctx, transaction, env.identifier(transaction.ChainID))
+	if err != nil {
+		return Classification{}, err
+	}
 	secure := slices.IndexFunc(checks, func(c check) bool { return c.verdict == Secure })
 	if secure < 0 {
 		secure = len(checks)
