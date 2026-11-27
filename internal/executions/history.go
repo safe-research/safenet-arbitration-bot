@@ -38,19 +38,21 @@ type History struct {
 	// chain confirms its block, or nil.
 	Creation *Creation
 	// uncounted is whether the Safe's nonce may not count the executions: their
-	// nonces show that a delegate call set it back, or a delegate call left it
-	// other than one above the highest nonce of its block, or it couldn't be read
-	// there, or an execution is unknown, which may be a delegate call.
+	// nonces show that a delegate call set it back, or a delegate call or a module
+	// left it other than one above the highest nonce of the executions up to its
+	// block, or at the last block, or it couldn't be read there, or an execution is
+	// unknown, which may be a delegate call.
 	uncounted bool
 }
 
 // Complete reports whether the executions found account for every nonce below
 // the Safe's nonce, and nothing shows that the nonce doesn't count the
-// executions: none of them shows that a delegate call set it back, the nonce is
-// one above the highest nonce of each block with a delegate call, which the
-// node can read, with an official singleton, and no execution is unknown. A
-// module can change the nonce without any of them showing it, since its
-// executions aren't found.
+// executions: none of them shows that a delegate call set it back, the nonce at
+// the end of each block with a delegate call or an execution by a module that
+// FindAll reads, and at the last block, is one above the highest nonce of the
+// executions up to it, which the node can read, with an official singleton, and
+// no execution is unknown. A module can still change the nonce in a block that
+// FindAll doesn't read without any of them showing it.
 func (h *History) Complete() bool {
 	return h.Missing != nil && len(h.Missing) == 0 && !h.uncounted
 }
@@ -110,12 +112,14 @@ type Rejected struct {
 // executions.
 //
 // Executions by modules don't use nonces, and the service doesn't list them, so
-// they aren't found. Any other request to the node that fails, such as for a
-// rate limit, fails FindAll, since it says nothing about the history, unless it
-// reads the Safe's nonce at an execution's block and another source has the
-// transaction (see Finder.Eth). A nonce at a block with a delegate call that
-// the node has no answer for, such as at a block whose state it doesn't keep,
-// only leaves the history incomplete.
+// they aren't found, but a module can change the nonce, so the scans note the
+// blocks with one to check the nonce at. Any other request to the node that
+// fails, such as for a rate limit, fails FindAll, since it says nothing about
+// the history, unless it reads the Safe's nonce at an execution's block and
+// another source has the transaction (see Finder.Eth). A nonce at a block with
+// a delegate call or a module's execution that the node has no answer for, such
+// as at a block whose state it doesn't keep, only leaves the history
+// incomplete.
 func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.BlockNumber) (*History, error) {
 	if f.Service == nil {
 		return nil, errors.New("finding every execution needs the Safe Transaction Service")
@@ -151,6 +155,7 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	}
 	slices.Sort(blocks)
 	c := newCollector(f, safe)
+	c.modules = true
 	for _, block := range slices.Compact(blocks) {
 		read, err := c.scan(ctx, ethrpc.BlockNumber(block), ethrpc.BlockNumber(block))
 		if err == nil && read == 0 {
@@ -205,7 +210,7 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	if h.uncounted = setBack(h.Executions); h.uncounted {
 		f.warn(errors.New("the nonces of the executions found show that a delegate call set the Safe's nonce back, so the nonce doesn't count the executions"))
 	} else if h.Missing != nil && len(h.Missing) == 0 {
-		counted, err := d.countedAfterDelegateCalls(ctx)
+		counted, err := d.counted(ctx, c.moduleBlocks)
 		if err != nil {
 			return nil, err
 		}
@@ -214,23 +219,26 @@ func (f *Finder) FindAll(ctx context.Context, safe ethrpc.Address, to ethrpc.Blo
 	return h, nil
 }
 
-// countedAfterDelegateCalls reports whether, at the end of each block with an
-// execution found that is a delegate call, the Safe's nonce is one above the
-// highest nonce of the block's executions found, as executions leave it, and
-// its singleton is an official Safe singleton, whose nonce() is the Safe's
-// nonce. A delegate call can set the nonce to anything, which the nonces of the
-// executions only show if both executions of a reused nonce are found. A
+// counted reports whether the Safe's nonce counts the executions found at the
+// end of each block where something else may have changed it: each block with
+// an execution found that is a delegate call, each of moduleBlocks, which have
+// an execution by a module, and to. There it must be one above the highest
+// nonce of the executions found up to the block, as executions leave it, or 0
+// if there are none, and, other than at to, whose nonce is the history's, the
+// Safe's singleton must be an official Safe singleton, whose nonce() is the
+// Safe's nonce. A delegate call or a module can set the nonce to anything,
+// which the nonces of the executions only show if both executions of a reused
+// nonce are found, and at to, after the last execution, not even then. A
 // delegate call to MultiSendCallOnly only makes calls, which, like an execution
 // that is a call, can only change the nonce through a module, whose executions
-// aren't found, but an unknown execution may be any delegate call. It warns
-// about each block where the nonce or the singleton isn't, once about those
-// where it can't be read, such as at a block whose state the node doesn't keep,
-// and once about unknown executions. A read that fails transiently, such as for
-// a rate limit, returns its error instead, since it says nothing about the
-// nonce.
-func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
-	highest := make(map[uint64]*big.Int)
-	var blocks []uint64
+// are only found in the blocks that FindAll reads, but an unknown execution may
+// be any delegate call. It warns about each block where the nonce or the
+// singleton isn't, once about those where it can't be read, such as at a block
+// whose state the node doesn't keep, and once about unknown executions. A read
+// that fails transiently, such as for a rate limit, returns its error instead,
+// since it says nothing about the nonce.
+func (d *decoder) counted(ctx context.Context, moduleBlocks []uint64) (bool, error) {
+	delegateCalls := make(map[uint64]bool)
 	unknown := false
 	for _, e := range d.executions {
 		tx := e.Transaction
@@ -238,20 +246,51 @@ func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
 			unknown = true
 			continue
 		}
-		if n := highest[e.Block]; n == nil || tx.Nonce.Cmp(n) > 0 {
-			highest[e.Block] = tx.Nonce
-		}
-		if tx.Operation == safenet.OperationDelegateCall && !checks.MultiSendCallOnly(tx.To) && !slices.Contains(blocks, e.Block) {
-			blocks = append(blocks, e.Block)
+		if tx.Operation == safenet.OperationDelegateCall && !checks.MultiSendCallOnly(tx.To) {
+			delegateCalls[e.Block] = true
 		}
 	}
+	modules := make(map[uint64]bool)
+	for _, block := range moduleBlocks {
+		modules[block] = true
+	}
+	// which names what may have changed the nonce in block.
+	which := func(block uint64) string {
+		switch {
+		case delegateCalls[block] && modules[block]:
+			return "a delegate call and an execution by a module"
+		case delegateCalls[block]:
+			return "a delegate call"
+		}
+		return "an execution by a module"
+	}
+	// nonceAfter returns the nonce that the executions found up to block leave, one
+	// above the highest of theirs, for blocks in order, as the executions are.
+	var highest *big.Int
+	done := 0
+	nonceAfter := func(block uint64) *big.Int {
+		for ; done < len(d.executions) && d.executions[done].Block <= block; done++ {
+			if tx := d.executions[done].Transaction; tx != nil && (highest == nil || tx.Nonce.Cmp(highest) > 0) {
+				highest = tx.Nonce
+			}
+		}
+		if highest == nil {
+			return new(big.Int)
+		}
+		return new(big.Int).Add(highest, big.NewInt(1))
+	}
+
+	blocks := slices.Concat(slices.Collect(maps.Keys(delegateCalls)), moduleBlocks)
+	slices.Sort(blocks)
+	blocks = slices.Compact(blocks)
 	counted, unread := true, 0
 	for _, block := range blocks {
+		want := nonceAfter(block)
 		next, err := d.nonceAt(ctx, block)
 		if ethrpc.Transient(err) {
 			return false, err
 		}
-		// The delegate call can also have replaced the singleton, whose nonce() is then
+		// A delegate call can also have replaced the singleton, whose nonce() is then
 		// no evidence of the Safe's nonce.
 		var account checks.SafeAccount
 		if next != nil {
@@ -260,21 +299,28 @@ func (d *decoder) countedAfterDelegateCalls(ctx context.Context) (bool, error) {
 				return false, err
 			}
 		}
-		want := new(big.Int).Add(highest[block], big.NewInt(1))
 		switch {
 		case next == nil || err != nil:
 			unread++
 		case account.SingletonVersion == nil && !olderSingleton(account.Singleton, d.Eth.ChainID()):
-			d.warn(fmt.Errorf("the Safe's singleton at the end of block %d, which has a delegate call, is %s rather than an official Safe singleton, so its nonce() may not be the Safe's nonce", block, account.Singleton))
+			d.warn(fmt.Errorf("the Safe's singleton at the end of block %d, which has %s, is %s rather than an official Safe singleton, so its nonce() may not be the Safe's nonce", block, which(block), account.Singleton))
 			counted = false
 		case next.Cmp(want) != 0:
-			d.warn(fmt.Errorf("the Safe's nonce at the end of block %d, which has a delegate call, is %s rather than %s, one above the highest nonce of its executions, so the nonce doesn't count the executions", block, next, want))
+			d.warn(fmt.Errorf("the Safe's nonce at the end of block %d, which has %s, is %s rather than %s, one above the highest nonce of the executions found up to it, so the nonce doesn't count the executions", block, which(block), next, want))
 			counted = false
 		}
 	}
 	if unread > 0 {
-		d.warn(fmt.Errorf("the Safe's nonce at the end of %d blocks with a delegate call is unknown, so it may not count the executions", unread))
+		d.warn(fmt.Errorf("the Safe's nonce at the end of %d blocks with a delegate call or an execution by a module is unknown, so it may not count the executions", unread))
 		counted = false
+	}
+	// The nonce at to is the history's, so it needs no read. A set-back after the
+	// last execution found leaves no other trace.
+	if to := uint64(d.to); !slices.Contains(blocks, to) {
+		if next, want := d.nexts[to], nonceAfter(to); next != nil && next.Cmp(want) != 0 {
+			d.warn(fmt.Errorf("the Safe's nonce at block %d is %s rather than %s, one above the highest nonce of the executions found, so the nonce doesn't count the executions", to, next, want))
+			counted = false
+		}
 	}
 	if unknown {
 		d.warn(errors.New("an execution found is unknown, so it may be a delegate call that changed the Safe's nonce"))

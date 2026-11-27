@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -643,7 +644,7 @@ func TestFindAllNonceUnanswered(t *testing.T) {
 		// The one at nonce 1 is a delegate call, which could have changed the Safe's
 		// nonce, so without its nonce at block 110, the history isn't complete. A read
 		// that timed out says nothing about the nonce, though, so FindAll fails.
-		wantWarnings := []string{"reading the nonce of " + safe.String() + " at block 110", "at the end of 1 blocks with a delegate call is unknown"}
+		wantWarnings := []string{"reading the nonce of " + safe.String() + " at block 110", "at the end of 1 blocks with a delegate call or an execution by a module is unknown"}
 		if ethrpc.Transient(&rpcErr) {
 			if !ethrpc.Transient(err) || !strings.Contains(err.Error(), rpcErr.Message) {
 				t.Errorf("%v: FindAll got %+v, %v; want the node's error", &rpcErr, got, err)
@@ -880,6 +881,129 @@ func TestFindAllNonceAfterDelegateCall(t *testing.T) {
 	}
 }
 
+// listedCalls adds to the chain the logs of the executions of three Safe
+// transactions that are calls, at the nonces 0 to 2, in the blocks 100, 110,
+// and last, and returns the service's listings of them.
+func listedCalls(c *chain, last uint64) []listing {
+	var listings []listing
+	for n, block := range []uint64{100, 110, last} {
+		tx := transaction([]string{"first", "second", "last"}[n], int64(n))
+		tx.Operation = safenet.OperationCall
+		c.logs = append(c.logs, executionLog(executionSuccessEvent, tx.Hash(), hash(byte(n+1)), true, block, 0))
+		listings = append(listings, listed(tx, hash(byte(n+1)), block))
+	}
+	return listings
+}
+
+func TestFindAllNonceAfterModule(t *testing.T) {
+	// A module executes a transaction in block 110, after the execution at nonce 1.
+	// In the first case, it sets the nonce back to 1, which the service hides by
+	// leaving out the execution that uses it again, so only the Safe's nonce at the
+	// end of the block shows it.
+	for _, test := range []struct {
+		name     string
+		again    bool
+		complete bool
+		warning  string
+	}{
+		{"set back", true, false, "the Safe's nonce at the end of block 110, which has an execution by a module, is 1 rather than 2"},
+		{"kept", false, true, ""},
+	} {
+		c := &chain{nonce: big.NewInt(3), logs: []ethrpc.Log{moduleLog(110, 1)}}
+		listings := listedCalls(c, 130)
+		if test.again {
+			again := transaction("again", 1)
+			c.logs = append(c.logs, executionLog(executionSuccessEvent, again.Hash(), hash(9), true, 120, 0))
+		}
+		var warnings []error
+		f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+		got, err := f.FindAll(t.Context(), safe, 200)
+		if err != nil {
+			t.Fatalf("%s: FindAll: %v", test.name, err)
+		}
+		if got.Complete() != test.complete || len(got.Missing) != 0 || len(got.Executions) != 3 {
+			t.Errorf("%s: FindAll got %+v, complete %t; want 3 executions, none missing, complete %t", test.name, got, got.Complete(), test.complete)
+		}
+		if test.warning == "" && len(warnings) != 0 || test.warning != "" && (len(warnings) != 1 || !strings.Contains(warnings[0].Error(), test.warning)) {
+			t.Errorf("%s: warnings %v, want %q", test.name, warnings, test.warning)
+		}
+	}
+}
+
+func TestFindAllNonceSetBackAfterLast(t *testing.T) {
+	// A module sets the nonce back to 1 in block 150, after the last execution.
+	// Every nonce below 1 is used, so FindAll scans no block, and only the Safe's
+	// nonce at the last block shows it.
+	c := &chain{nonce: big.NewInt(1), logs: []ethrpc.Log{moduleLog(150, 0)}}
+	listings := listedCalls(c, 120)
+	var warnings []error
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+	got, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if got.Complete() || len(got.Missing) != 0 || len(got.Scanned) != 0 {
+		t.Errorf("FindAll got %+v, complete %t; want none missing, nothing scanned, incomplete", got, got.Complete())
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "the Safe's nonce at block 200 is 1 rather than 3") {
+		t.Errorf("warnings %v, want one about the nonce at block 200", warnings)
+	}
+}
+
+func TestFindAllModuleInGap(t *testing.T) {
+	// The service doesn't list the execution at nonce 1, so FindAll scans the
+	// blocks between those of nonces 0 and 2, where a module executes a transaction
+	// in block 115, after the execution at nonce 1, which leaves the Safe's nonce
+	// at 2. The scan finds it, so FindAll reads the nonce there.
+	c := &chain{nonce: big.NewInt(3), logs: []ethrpc.Log{moduleLog(115, 0)}}
+	listings := listedCalls(c, 130)
+	c.txs = map[ethrpc.Hash]ethrpc.Transaction{hash(2): {To: &safe, Input: execCall(listings[1].tx)}}
+	var warnings []error
+	f := &Finder{
+		Eth:     c.serve(t),
+		Service: historyService(t, []listing{listings[0], listings[2]}),
+		Warn:    func(err error) { warnings = append(warnings, err) },
+	}
+	got, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	if !got.Complete() || len(got.Executions) != 3 || !reflect.DeepEqual(got.Scanned, []BlockRange{{100, 130}}) {
+		t.Errorf("FindAll got %+v, complete %t; want 3 executions, blocks 100 to 130 scanned, complete", got, got.Complete())
+	}
+	if !slices.Contains(c.callBlocks, 115) {
+		t.Errorf("calls at blocks %v, want the Safe's nonce read at block 115", c.callBlocks)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings %v, want none", warnings)
+	}
+}
+
+func TestFindAllModuleNonceUnanswered(t *testing.T) {
+	// A module executes a transaction in block 110, where the node doesn't answer
+	// for the Safe's nonce, which leaves the history incomplete, unless the read
+	// timed out, which fails FindAll.
+	for _, rpcErr := range []ethrpc.Error{missingState, nodeTimeout} {
+		c := &chain{nonce: big.NewInt(3), logs: []ethrpc.Log{moduleLog(110, 1)}, erringCalls: map[uint64]ethrpc.Error{110: rpcErr}}
+		listings := listedCalls(c, 130)
+		var warnings []error
+		f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+		got, err := f.FindAll(t.Context(), safe, 200)
+		if ethrpc.Transient(&rpcErr) {
+			if !ethrpc.Transient(err) || !strings.Contains(err.Error(), rpcErr.Message) {
+				t.Errorf("%v: FindAll got %+v, %v; want the node's error", &rpcErr, got, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
+		}
+		if got.Complete() || len(warnings) != 2 || !strings.Contains(warnings[1].Error(), "at the end of 1 blocks with a delegate call or an execution by a module is unknown") {
+			t.Errorf("%v: FindAll got %+v, warnings %v; want an incomplete history, with a warning about block 110", &rpcErr, got, warnings)
+		}
+	}
+}
+
 func TestOlderSingleton(t *testing.T) {
 	// The 1.1.1 singleton is only official on Ethereum Mainnet and Gnosis Chain,
 	// and a § 2.1 singleton isn't one of the older ones.
@@ -924,7 +1048,7 @@ func TestFindAllSingletonUnanswered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
 		}
-		if got.Complete() || len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "at the end of 1 blocks with a delegate call is unknown") {
+		if got.Complete() || len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "at the end of 1 blocks with a delegate call or an execution by a module is unknown") {
 			t.Errorf("%v: FindAll got %+v, warnings %v; want an incomplete history, with a warning about block 110", &rpcErr, got, warnings)
 		}
 	}

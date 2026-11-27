@@ -44,6 +44,10 @@ var (
 	multiSigEvent         = solabi.Event("SafeMultiSigTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes,bytes)")
 	execTransaction       = solabi.Selector("execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)")
 	nonceSelector         = solabi.Selector("nonce()")
+	// A module's execution, which uses no nonce, but can change the Safe's. 1.1.1
+	// and 1.2.0 log them too.
+	moduleSuccessEvent = solabi.Event("ExecutionFromModuleSuccess(address)")
+	moduleFailureEvent = solabi.Event("ExecutionFromModuleFailure(address)")
 )
 
 // Source is where a transaction was decoded from.
@@ -128,6 +132,10 @@ type collector struct {
 	// seen are the logs collected, by block and log index, so that a block that is
 	// read again adds nothing.
 	seen map[[2]uint64]bool
+	// modules is whether it collects the blocks of the Safe's executions by modules
+	// too, in moduleBlocks, in the order of their logs.
+	modules      bool
+	moduleBlocks []uint64
 }
 
 func newCollector(f *Finder, safe ethrpc.Address) *collector {
@@ -141,11 +149,15 @@ func newCollector(f *Finder, safe ethrpc.Address) *collector {
 // including both, and returns the number of execution logs that it read, new or
 // not.
 func (c *collector) scan(ctx context.Context, from, to ethrpc.BlockNumber) (int, error) {
+	topics := []ethrpc.Hash{executionSuccessEvent, executionFailureEvent, multiSigEvent}
+	if c.modules {
+		topics = append(topics, moduleSuccessEvent, moduleFailureEvent)
+	}
 	logs := c.Eth.ScanLogs(ctx, ethrpc.LogFilter{
 		FromBlock: from,
 		ToBlock:   to,
 		Addresses: []ethrpc.Address{c.safe},
-		Topics:    [][]ethrpc.Hash{{executionSuccessEvent, executionFailureEvent, multiSigEvent}},
+		Topics:    [][]ethrpc.Hash{topics},
 	})
 	read := 0
 	for log, err := range logs {
@@ -155,7 +167,8 @@ func (c *collector) scan(ctx context.Context, from, to ethrpc.BlockNumber) (int,
 		if log.Removed || len(log.Topics) == 0 {
 			continue
 		}
-		if log.Topics[0] != multiSigEvent {
+		module := log.Topics[0] == moduleSuccessEvent || log.Topics[0] == moduleFailureEvent
+		if log.Topics[0] != multiSigEvent && !module {
 			read++
 		}
 		key := [2]uint64{uint64(log.BlockNumber), uint64(log.LogIndex)}
@@ -163,6 +176,10 @@ func (c *collector) scan(ctx context.Context, from, to ethrpc.BlockNumber) (int,
 			continue
 		}
 		c.seen[key] = true
+		if module {
+			c.moduleBlocks = append(c.moduleBlocks, uint64(log.BlockNumber))
+			continue
+		}
 		if log.Topics[0] == multiSigEvent {
 			if tx := c.decodeEvent(c.safe, log.Data); tx != nil {
 				c.events[log.TransactionHash] = append(c.events[log.TransactionHash], tx)

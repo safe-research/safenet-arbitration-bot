@@ -32,7 +32,8 @@ var (
 type chain struct {
 	logs []ethrpc.Log
 	// nonce is the Safe's nonce at the last block, 200, or nil if reading it fails,
-	// and at an earlier block, it is less the Safe's executions after it.
+	// and at an earlier block, it is less the Safe's executions after it, but not
+	// its executions by modules.
 	nonce *big.Int
 	// txs are the transactions by hash.
 	txs map[ethrpc.Hash]ethrpc.Transaction
@@ -69,8 +70,12 @@ type chain struct {
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
 	// status 500.
 	failingBlocks []uint64
-	// ranges are the block ranges of the eth_getLogs requests, in order.
+	// ranges are the block ranges of the eth_getLogs requests, in order, and topics
+	// their lists of first topics.
 	ranges [][2]uint64
+	topics [][]ethrpc.Hash
+	// callBlocks are the blocks of the eth_call requests, in order.
+	callBlocks []uint64
 }
 
 // nodeTimeout is Nethermind's error for a request that ran past its time limit,
@@ -133,6 +138,7 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			json.Unmarshal(req.Params[0], &filter)
 			c.mu.Lock()
 			c.ranges = append(c.ranges, [2]uint64{uint64(filter.FromBlock), uint64(filter.ToBlock)})
+			c.topics = append(c.topics, filter.Topics[0])
 			c.mu.Unlock()
 			if slices.ContainsFunc(c.failingBlocks, func(b uint64) bool { return b >= uint64(filter.FromBlock) && b <= uint64(filter.ToBlock) }) {
 				http.Error(w, "overloaded", http.StatusInternalServerError)
@@ -151,6 +157,9 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			var block ethrpc.BlockNumber
 			json.Unmarshal(req.Params[0], &call)
 			json.Unmarshal(req.Params[1], &block)
+			c.mu.Lock()
+			c.callBlocks = append(c.callBlocks, uint64(block))
+			c.mu.Unlock()
 			if rpcErr, ok := c.erringCalls[uint64(block)]; ok {
 				res["error"] = rpcErr
 				break
@@ -165,7 +174,7 @@ func (c *chain) serve(t *testing.T) *ethrpc.Client {
 			}
 			nonce := new(big.Int).Set(c.nonce)
 			for _, log := range c.logs {
-				if log.BlockNumber > block && log.BlockNumber <= 200 && log.Topics[0] != multiSigEvent {
+				if log.BlockNumber > block && log.BlockNumber <= 200 && (log.Topics[0] == executionSuccessEvent || log.Topics[0] == executionFailureEvent) {
 					nonce.Sub(nonce, big.NewInt(1))
 				}
 			}
@@ -299,6 +308,18 @@ func executionLog(event, safeTxHash, hash ethrpc.Hash, indexed bool, block, inde
 		log.Data = append(safeTxHash[:], payment[:]...)
 	}
 	return log
+}
+
+// moduleLog returns the log that a Safe logs when a module executes a
+// transaction through it.
+func moduleLog(block, index uint64) ethrpc.Log {
+	return ethrpc.Log{
+		Address:         safe,
+		Topics:          []ethrpc.Hash{moduleSuccessEvent, {12: 0x0d}},
+		BlockNumber:     ethrpc.BlockNumber(block),
+		TransactionHash: hash(0x0d),
+		LogIndex:        ethrpc.Quantity(index),
+	}
 }
 
 func hash(n byte) ethrpc.Hash { return ethrpc.Hash{0: 0xaa, 31: n} }
@@ -838,6 +859,32 @@ func TestFindReturnsEmptyList(t *testing.T) {
 	}
 	if got == nil || len(got) != 0 {
 		t.Errorf("Find: got %#v, want an empty list", got)
+	}
+}
+
+// TestFindLeavesOutModules checks that Find asks the node for the Safe's
+// executions only, as it always has, so that its executions by modules don't
+// make the scans split their ranges.
+func TestFindLeavesOutModules(t *testing.T) {
+	tx := transaction("service", 0)
+	c := &chain{nonce: big.NewInt(1), logs: []ethrpc.Log{
+		moduleLog(100, 0),
+		executionLog(executionSuccessEvent, tx.Hash(), hash(1), true, 100, 1),
+		moduleLog(110, 0),
+	}}
+	f := &Finder{Eth: c.serve(t), Service: service(t, map[ethrpc.Hash]*safenet.SafeTransaction{tx.Hash(): tx})}
+	got, err := f.Find(t.Context(), safe, 0, 200)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if len(got) != 1 || got[0].Transaction == nil {
+		t.Errorf("Find: got %+v, want the one execution", got)
+	}
+	want := []ethrpc.Hash{executionSuccessEvent, executionFailureEvent, multiSigEvent}
+	for _, topics := range c.topics {
+		if !slices.Equal(topics, want) {
+			t.Errorf("eth_getLogs topics: got %v, want %v", topics, want)
+		}
 	}
 }
 

@@ -111,6 +111,38 @@ func TestExecutionsAllIncomplete(t *testing.T) {
 	}
 }
 
+func TestExecutionsAllNonceSetBack(t *testing.T) {
+	// Three executions of the Safe, at the nonces 0 to 2, which the service lists,
+	// and the Safe's nonce 1 at the Safe block, which something set back after the
+	// last of them. The executions use every nonce below it, so the only warning is
+	// about the nonce.
+	executionSuccess := solabi.Event("ExecutionSuccess(bytes32,uint256)")
+	payment := solabi.Uint(big.NewInt(0))
+	service := &historyService{transactions: map[ethrpc.Hash]map[string]any{}}
+	chain := &historyChain{nonce: big.NewInt(1)}
+	for n, block := range []uint64{100, 150, 180} {
+		tx := &safenet.SafeTransaction{
+			ChainID: big.NewInt(1), Safe: historySafe, To: historyAlice, Value: big.NewInt(int64(n)), Data: []byte{},
+			SafeTxGas: new(big.Int), BaseGas: new(big.Int), GasPrice: new(big.Int), Nonce: big.NewInt(int64(n)),
+		}
+		chain.logs = append(chain.logs, ethrpc.Log{
+			Address: historySafe, Topics: []ethrpc.Hash{executionSuccess, tx.Hash()}, Data: payment[:],
+			BlockNumber: ethrpc.BlockNumber(block), TransactionHash: hashOf(byte(n + 1)),
+		})
+		service.executions = append(service.executions, listedExecution(tx, hashOf(byte(n+1)), block))
+		service.transactions[tx.Hash()] = service.executions[n]
+	}
+	config, request := historyFiles(t, chain.serve(t), service.serve(t))
+	code, stdout, stderr := runArbot(t, "-config", config, "executions", "-all", "-request-file", request)
+	if want := "Nonce at block 200: 1 (incomplete)"; code != 0 || !strings.Contains(stdout, want) {
+		t.Fatalf("executions -all: got status %d, stdout %q; want 0 and a line %q\n%s", code, stdout, want, stderr)
+	}
+	want := "warning: the Safe's nonce at block 200 is 1 rather than 3"
+	if n := strings.Count(stderr, "warning: "); n != 1 || !strings.Contains(stderr, want) {
+		t.Errorf("executions -all: got stderr %q, want one warning containing %q", stderr, want)
+	}
+}
+
 // listedExecution returns the execution of tx in the transaction hash at block
 // as the service lists it, which is also how it has tx by its hash.
 func listedExecution(tx *safenet.SafeTransaction, hash ethrpc.Hash, block uint64) map[string]any {
