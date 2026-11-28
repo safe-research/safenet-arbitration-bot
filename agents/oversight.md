@@ -25,7 +25,8 @@ Use only the request file and `arbot` to verify facts. Don't read chains, IPFS, 
 A fact is a finding if:
 
 - it is false, or differs from what you found, such as in a value, an address, or a block;
-- it is stated as of the request's `safeBlock` or `ethereumBlock`, but holds only at a later block, or includes the effects of the transaction itself;
+- it is stated as of the request's `safeBlock` or `ethereumBlock`, but holds only at a later block, or includes the effects of an execution after `safeBlock`, such as one of the transaction itself;
+- it is an execution of the request's own Safe transaction, taken as onchain data, in a block after `safeBlock`. One in or before `safeBlock` is onchain data whether `arbot status` places it `before-proposal` or can't settle the status, such as when it is `unknown`, and `arbot executions` marks it with `proposal`;
 - it comes from memory rather than a source, such as what a contract, token, or function selector is.
 
 ## Checking the Case

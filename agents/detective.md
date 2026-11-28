@@ -25,7 +25,7 @@ Don't read chains, IPFS, or the web any other way, such as with `cast`, `curl`, 
 
 Only collect evidence that the Charter admits (§ 3.3):
 
-- **Onchain data** (§ 2.8), as of the proposal: the state of the Safe's chain at the request's `safeBlock`, and of Ethereum Mainnet at its `ethereumBlock`. Never use the effects of the transaction itself or of anything later (§ 3.6).
+- **Onchain data** (§ 2.8), as of the proposal: the state of the Safe's chain at the request's `safeBlock`, and of Ethereum Mainnet at its `ethereumBlock`. It includes an execution of the request's own Safe transaction in or before `safeBlock`, as the ruling on `0x1fcf956366f2cbb8edda558c0d803c5adb8b00459f8a1e91a85e213d632282c8` held. Run `arbot status -json -request-file <path>` for it: if its `execution.status` is `executed` and its `timing.value` is `before-proposal`, record the execution as onchain data, with its block, time, and onchain transaction, and the rules it bears on. An execution of the request's own Safe transaction that `arbot executions` lists with `proposal`, in or before `safeBlock`, is the same fact: record it as onchain data too, even if `arbot status`, whose scan is bounded, doesn't settle the status. Nothing on chain after `safeBlock` or `ethereumBlock` is onchain data (§ 2.8): record what `arbot status` reports about later blocks, such as a later execution and its timing, under Excluded.
 - **Protocol-recorded purpose** (§ 2.11), such as the proposal's `oracleData`.
 - **Public offchain context and security evidence** (§ 3.4). For each piece, record its source, when it was observed, and why the source is reliable. You have no way to collect it yet, so record the offchain evidence that would matter as gaps.
 

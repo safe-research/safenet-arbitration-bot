@@ -19,10 +19,10 @@ Ask the user for any input that the request doesn't settle.
 
 ## Is the Evidence Admissible?
 
-The command must only report evidence that the Charter admits (§ 3.3), as of the proposal (§ 2.8 and § 3.6):
+The command must only report evidence that the Charter admits (§ 3.3):
 
-- **Onchain data** comes from the Safe's chain at the request's `safeBlock`, or from Ethereum Mainnet at its `ethereumBlock`, and never from later blocks. It never includes the effects of the transaction itself.
-- **Offchain evidence**, such as a threat-intelligence label, must be public, attributable, and reasonably verifiable (§ 3.4). The command reports its source and when it observed it, so that the Council can state both (§ 2.7 and § 3.6).
+- **Onchain data** is as of the proposal (§ 2.8 and § 3.6). It comes from the Safe's chain at the request's `safeBlock`, or from Ethereum Mainnet at its `ethereumBlock`, and never from later blocks. It includes an execution of the request's own Safe transaction only if it is in or before `safeBlock`.
+- **Offchain evidence**, such as a threat-intelligence label, must be public, attributable, and reasonably verifiable (§ 3.4). The command reports its source and when it observed it, so that the Council can state both (§ 2.7 and § 3.6). It may report public evidence that became available after the proposal and before the ruling, with its observation time, but never as if it had been available earlier (§ 3.6).
 
 Private or after-the-fact claims of what the user intended are excluded (§ 3.5), so no command reports them.
 

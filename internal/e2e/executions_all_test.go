@@ -148,7 +148,7 @@ func TestExecutionsAll(t *testing.T) {
 		t.Errorf("executions -all of the third: got executions %+v, want the third marked", own.Executions)
 	}
 	ownText := arbot.Run(t, "executions", "-all", "-request-file", pathThird)
-	if want := `(?m)^The execution in block \d+, transaction ` + third.TxHash.String() + `, is of the request's own Safe transaction`; !regexp.MustCompile(want).Match(ownText) {
+	if want := `(?m)^The execution in block \d+, transaction ` + third.TxHash.String() + `, is of the request's own Safe transaction, before the proposal, so it is onchain data \(§ 2\.8\)\.$`; !regexp.MustCompile(want).Match(ownText) {
 		t.Errorf("executions -all of the third: output has no line matching %q:\n%s", want, ownText)
 	}
 	// Without -all, it is marked too, and only it has the key.

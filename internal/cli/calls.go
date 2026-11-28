@@ -20,7 +20,7 @@ func callsCommand(ctx context.Context, e *env, args []string) error {
 		out := flags.Output()
 		fmt.Fprintf(out, "Usage: %s calls [flags] -request-file <path>\n\n", e.progname)
 		fmt.Fprintf(out, "Lists the calls that the Safe of a request makes, as arbot classify judges them, read from the Safe's\n")
-		fmt.Fprintf(out, "chain as of the request's Safe block, without the transaction's own effects or anything later.\n\n")
+		fmt.Fprintf(out, "chain as of the request's Safe block, without anything later.\n\n")
 		fmt.Fprintf(out, "It shows the Safe's code hash and the Safe proxy version of Charter § 2.1 whose official proxy factory\n")
 		fmt.Fprintf(out, "deploys a proxy with that code on its network, if any, and its singleton, the address in storage slot\n")
 		fmt.Fprintf(out, "0, with the § 2.1 singleton version that it is an official deployment of, if any.\n\n")

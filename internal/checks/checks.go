@@ -79,8 +79,8 @@ type env struct {
 	// dial connects to a chain.
 	dial ethrpc.Dialer
 	// block is the last block on the Safe's chain before the proposal. Checks read
-	// the chain's state at this block, without the effects of the transaction or of
-	// anything later (Charter § 2.8 and § 3.6).
+	// the chain's state at this block, without anything later (Charter § 2.8 and §
+	// 3.6).
 	block uint64
 }
 

@@ -62,8 +62,9 @@ type serviceSource struct {
 // execution is an execution in the output of `arbot executions`.
 type execution struct {
 	executions.Execution
-	// Proposal is whether the Safe transaction is the request's own, whose effects
-	// aren't evidence (§ 3.6). It is left out if it isn't.
+	// Proposal is whether the Safe transaction is the request's own, whose
+	// execution, in or before the Safe block, is onchain data (§ 2.8). It is left
+	// out if it isn't.
 	Proposal bool `json:"proposal,omitempty"`
 	// Target and Calls are the account that the transaction's own call is to, and
 	// the calls that the transaction makes, as arbot calls reports them, with
@@ -86,8 +87,8 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "Usage: %s executions [flags] -request-file <path>\n\n", e.progname)
 		fmt.Fprintf(out, "Lists the Safe transactions that the Safe of a request executed, from the Safe's chain, as of the\n")
 		fmt.Fprintf(out, "request's Safe block: the ExecutionSuccess and ExecutionFailure events of the Safe in the last -blocks\n")
-		fmt.Fprintf(out, "blocks up to it, without the transaction's own effects or anything later. It searches that range\n")
-		fmt.Fprintf(out, "only, so an execution before it isn't listed. Executions by modules aren't listed.\n\n")
+		fmt.Fprintf(out, "blocks up to it, without anything later. It searches that range only, so an execution before it isn't\n")
+		fmt.Fprintf(out, "listed. Executions by modules aren't listed.\n\n")
 		fmt.Fprintf(out, "The events only have the hash of each Safe transaction, so the command decodes the transaction from\n")
 		fmt.Fprintf(out, "the first source that has one with that hash, and reports the source:\n\n")
 		fmt.Fprintf(out, "  event     the SafeMultiSigTransaction event that SafeL2 logs\n")
@@ -106,7 +107,8 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "The text output is a table of the block, its time, onchain transaction, result, Safe transaction hash,\n")
 		fmt.Fprintf(out, "source, nonce, target, value, and operation of each execution, and the selector and length of its\n")
 		fmt.Fprintf(out, "data, and -json has all of it. The execution of the request's own Safe transaction, if it was executed\n")
-		fmt.Fprintf(out, "by the Safe block, is marked, since its effects aren't evidence (§ 3.6).\n\n")
+		fmt.Fprintf(out, "by the Safe block, is marked: it happened before the proposal, so it is onchain data (§ 2.8), and\n")
+		fmt.Fprintf(out, "arbot status reports its timing.\n\n")
 		fmt.Fprintf(out, "With -calls, it also lists the calls that each known transaction makes, as arbot calls lists those\n")
 		fmt.Fprintf(out, "of a request's transaction, with the accounts that they are to as of the request's Safe block: delegate\n")
 		fmt.Fprintf(out, "calls to MultiSend contracts decoded into their calls, and each call's data decoded as a well-known\n")
@@ -244,7 +246,7 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	if proposal != nil {
-		fmt.Fprintf(e.stdout, "\nThe execution in block %d, transaction %s, is of the request's own Safe transaction, whose effects aren't evidence (§ 3.6).\n", proposal.Block, proposal.TxHash)
+		fmt.Fprintf(e.stdout, "\nThe execution in block %d, transaction %s, is of the request's own Safe transaction, before the proposal, so it is onchain data (§ 2.8).\n", proposal.Block, proposal.TxHash)
 	}
 	if h := report.History; h != nil && len(h.Rejected) > 0 {
 		fmt.Fprintf(e.stdout, "\nRejected\n\n")
