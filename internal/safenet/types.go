@@ -45,6 +45,17 @@ type Request struct {
 	Arbitration *Arbitration `json:"arbitration"`
 }
 
+// Progress is a request as of a block, without its proposal and votes: its
+// state and arbitration, which can change after the proposal, and its terms.
+type Progress struct {
+	// Block is the Gnosis Chain block that the request was read at.
+	Block uint64 `json:"block"`
+	State State  `json:"state"`
+	Terms Terms  `json:"terms"`
+	// Arbitration is nil unless a split vote froze the request.
+	Arbitration *Arbitration `json:"arbitration"`
+}
+
 // Token is an ERC-20 token.
 type Token struct {
 	Address  ethrpc.Address `json:"address"`

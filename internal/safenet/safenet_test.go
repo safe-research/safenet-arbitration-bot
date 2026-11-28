@@ -620,6 +620,32 @@ func TestRequestNotFound(t *testing.T) {
 	}
 }
 
+// TestProgress checks that Progress reads the state, the terms, and the
+// arbitration that Request reads, for requests in every state.
+func TestProgress(t *testing.T) {
+	f := loadFixture(t)
+	sn := f.open(t)
+	for _, id := range []ethrpc.Hash{frozenID, insecureID, secureID, outOfScopeID, arbitrationTimedOutID, unanimousID, requestTimedOutID} {
+		request, err := sn.Request(t.Context(), id)
+		if err != nil {
+			t.Fatalf("Request(%s): %v", id, err)
+		}
+		got, err := sn.Progress(t.Context(), id)
+		if err != nil {
+			t.Errorf("Progress(%s): %v", id, err)
+			continue
+		}
+		g, _ := json.Marshal(got)
+		w, _ := json.Marshal(&Progress{Block: uint64(f.Block), State: request.State, Terms: request.Terms, Arbitration: request.Arbitration})
+		if !bytes.Equal(g, w) {
+			t.Errorf("Progress(%s):\ngot  %s\nwant %s", id, g, w)
+		}
+	}
+	if _, err := sn.Progress(t.Context(), ethrpc.Hash{31: 1}); !errors.Is(err, ErrRequestNotFound) {
+		t.Errorf("Progress: got error %v, want %v", err, ErrRequestNotFound)
+	}
+}
+
 func TestRequestWrongConsensus(t *testing.T) {
 	f := loadFixture(t)
 	sn := New(f.dial(t), fixtureOracle, ethrpc.Address{19: 1})
