@@ -29,6 +29,8 @@ type safeRef struct {
 	SafeTxHash  ethrpc.Hash
 	Transaction *safenet.SafeTransaction
 	eth         *ethrpc.Client
+	// request is the request, for the commands that need more of it.
+	request *safenet.Request
 }
 
 // openSafe reads the request in the file at requestFile, as written by arbot
@@ -48,7 +50,7 @@ func openSafe(ctx context.Context, e *env, requestFile string) (*safeRef, error)
 	if tx.ChainID == nil || !tx.ChainID.IsUint64() || request.Proposal.SafeBlock == 0 {
 		return nil, fmt.Errorf("request in %s has no Safe chain ID or block", requestFile)
 	}
-	s := &safeRef{Safe: tx.Safe, ChainID: tx.ChainID.Uint64(), SafeBlock: request.Proposal.SafeBlock, SafeTxHash: request.Proposal.SafeTxHash, Transaction: &tx}
+	s := &safeRef{Safe: tx.Safe, ChainID: tx.ChainID.Uint64(), SafeBlock: request.Proposal.SafeBlock, SafeTxHash: request.Proposal.SafeTxHash, Transaction: &tx, request: request}
 	if s.eth, err = ethrpc.NewDialer(e.cfg.RPCs)(ctx, s.ChainID); err != nil {
 		return nil, err
 	}

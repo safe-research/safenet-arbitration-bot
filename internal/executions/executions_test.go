@@ -997,3 +997,29 @@ func TestMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestInReceipt(t *testing.T) {
+	want := hash(0x5f)
+	// Logs that aren't the Safe's execution of the hash come first: another
+	// contract's with the hash, a removed one, and one of another hash. The node
+	// leaves the transaction and the block out of the logs.
+	forged := executionLog(executionSuccessEvent, want, ethrpc.Hash{}, true, 0, 0)
+	forged.Address = target
+	removed := executionLog(executionSuccessEvent, want, ethrpc.Hash{}, true, 0, 1)
+	removed.Removed = true
+	receipt := ethrpc.Receipt{
+		TransactionHash: hash(1), BlockNumber: 100,
+		Logs: []ethrpc.Log{
+			forged, removed,
+			executionLog(executionSuccessEvent, hash(0x5e), ethrpc.Hash{}, true, 0, 2),
+			executionLog(executionFailureEvent, want, ethrpc.Hash{}, false, 0, 3),
+		},
+	}
+	got, ok := InReceipt(receipt, safe, want)
+	if !ok || got.LogIndex != 3 || got.SafeTxHash != want || got.Success || got.TxHash != hash(1) || got.Block != 100 {
+		t.Errorf("InReceipt: got %+v, %t, want the failure in log 3 of transaction %s, in block 100", got, ok, hash(1))
+	}
+	if got, ok := InReceipt(receipt, safe, hash(0x5d)); ok {
+		t.Errorf("InReceipt of another hash: got %+v, want none", got)
+	}
+}

@@ -37,9 +37,10 @@ type TxServiceTransfer struct {
 
 // TxService is a Safe Transaction Service that lists the executions and
 // transfers of a test, in the order given, for the Safes that they are of,
-// which are the Safes that it knows. Like the service, it lists nothing for a
-// Safe that it doesn't know, and filters the transfers by kind, sender,
-// recipient, and block.
+// which are the Safes that it knows, and has the executions by their Safe
+// transaction hashes. Like the service, it lists nothing for a Safe that it
+// doesn't know, and filters the transfers by kind, sender, recipient, and
+// block.
 type TxService struct {
 	*httptest.Server
 	mu         sync.Mutex
@@ -70,7 +71,33 @@ func (s *TxService) ListTransfers(transfers ...TxServiceTransfer) {
 	s.transfers = append(s.transfers, transfers...)
 }
 
+// result returns the execution as the service encodes it.
+func (e *TxServiceExecution) result() map[string]any {
+	tx := e.Transaction
+	return map[string]any{
+		"safe": tx.Safe, "to": tx.To, "value": tx.Value.String(), "data": tx.Data,
+		"operation": uint8(tx.Operation), "safeTxGas": tx.SafeTxGas.String(), "baseGas": tx.BaseGas.String(),
+		"gasPrice": tx.GasPrice.String(), "gasToken": tx.GasToken, "refundReceiver": tx.RefundReceiver,
+		"nonce": tx.Nonce.Uint64(), "safeTxHash": e.SafeTxHash, "transactionHash": e.TxHash,
+		"blockNumber": e.Block, "isExecuted": true, "isSuccessful": true,
+	}
+}
+
 func (s *TxService) serve(w http.ResponseWriter, r *http.Request) {
+	// A transaction by its Safe transaction hash, as the first execution listed
+	// with it.
+	if hash, ok := strings.CutPrefix(r.URL.Path, "/api/v1/multisig-transactions/"); ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, e := range s.executions {
+			if e.SafeTxHash.String()+"/" == hash {
+				json.NewEncoder(w).Encode(e.result())
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
 	path, found := strings.CutPrefix(r.URL.Path, "/api/v1/safes/")
 	address, endpoint, _ := strings.Cut(path, "/")
 	safe, err := ethrpc.ParseAddress(address)
@@ -89,15 +116,9 @@ func (s *TxService) serve(w http.ResponseWriter, r *http.Request) {
 	known := false
 	executions, transfers := []map[string]any{}, []map[string]any{}
 	for _, e := range s.executions {
-		if tx := e.Transaction; tx.Safe == safe {
+		if e.Transaction.Safe == safe {
 			known = true
-			executions = append(executions, map[string]any{
-				"safe": tx.Safe, "to": tx.To, "value": tx.Value.String(), "data": tx.Data,
-				"operation": uint8(tx.Operation), "safeTxGas": tx.SafeTxGas.String(), "baseGas": tx.BaseGas.String(),
-				"gasPrice": tx.GasPrice.String(), "gasToken": tx.GasToken, "refundReceiver": tx.RefundReceiver,
-				"nonce": tx.Nonce.Uint64(), "safeTxHash": e.SafeTxHash, "transactionHash": e.TxHash,
-				"blockNumber": e.Block, "isExecuted": true, "isSuccessful": true,
-			})
+			executions = append(executions, e.result())
 		}
 	}
 	for _, t := range s.transfers {

@@ -31,8 +31,9 @@ type Client struct {
 
 	// times are the timestamps of the blocks that the client read, by number, so
 	// that BlockTime reads each block's header once. Commands ask for the times of
-	// blocks up to a request's Safe block, which are final or nearly so, so a
-	// reorganization that changes a timestamp while a command runs is left out.
+	// blocks up to a request's Safe block, which are final or nearly so, but status
+	// also for later ones, up to the latest block, so a reorganization while status
+	// runs can leave the client with a time that the block no longer has.
 	mu    sync.Mutex
 	times map[BlockNumber]time.Time
 }
@@ -185,8 +186,12 @@ func (c *Client) GetLogs(ctx context.Context, filter LogFilter) ([]Log, error) {
 }
 
 // getLogs is GetLogs, retrying the JSON-RPC errors that retryable reports.
+// ScanLogs reads its chunks with it too, so both fail on a result that isn't
+// logs: null, or a log without its address, block number, transaction hash,
+// topics, data, or index, which every log has, rather than read it as no logs,
+// as a log of the zero address in block 0, or as one at index 0.
 func (c *Client) getLogs(ctx context.Context, retryable func(error) bool, filter LogFilter) ([]Log, error) {
-	var result *[]Log
+	var result *[]logEntry
 	if err := c.retrying(ctx, retryable, &result, "eth_getLogs", filter); err != nil {
 		return nil, err
 	}
@@ -194,7 +199,29 @@ func (c *Client) getLogs(ctx context.Context, retryable func(error) bool, filter
 	if result == nil {
 		return nil, fmt.Errorf("eth_getLogs: null result for blocks %d to %d", filter.FromBlock, filter.ToBlock)
 	}
-	return *result, nil
+	logs := make([]Log, len(*result))
+	for i, entry := range *result {
+		if entry.Address == nil || entry.BlockNumber == nil || entry.TransactionHash == nil || entry.Topics == nil || entry.Data == nil || entry.LogIndex == nil {
+			return nil, fmt.Errorf("eth_getLogs: a log for blocks %d to %d has no address, block number, transaction hash, topics, data, or index", filter.FromBlock, filter.ToBlock)
+		}
+		logs[i] = entry.Log
+		logs[i].Address, logs[i].BlockNumber, logs[i].TransactionHash = *entry.Address, *entry.BlockNumber, *entry.TransactionHash
+		logs[i].Topics, logs[i].Data, logs[i].LogIndex = *entry.Topics, *entry.Data, *entry.LogIndex
+	}
+	return logs, nil
+}
+
+// logEntry is a log as eth_getLogs returns it. The fields that every log has
+// are pointers, which take the place of Log's, so that a missing one isn't read
+// as zero.
+type logEntry struct {
+	Log
+	Address         *Address     `json:"address"`
+	Topics          *[]Hash      `json:"topics"`
+	Data            *Bytes       `json:"data"`
+	BlockNumber     *BlockNumber `json:"blockNumber"`
+	TransactionHash *Hash        `json:"transactionHash"`
+	LogIndex        *Quantity    `json:"logIndex"`
 }
 
 // ErrNotFound is the error for a transaction that the node doesn't have. A node

@@ -733,6 +733,75 @@ func TestNullResult(t *testing.T) {
 	}
 }
 
+// TestLogsIncomplete checks that a log without its address, block number,
+// transaction hash, topics, data, or index is no answer, in GetLogs and in
+// ScanLogs, rather than a log of the zero address in block 0 or at index 0,
+// while a result without logs is one, and so is a log whose fields are zero or
+// empty.
+func TestLogsIncomplete(t *testing.T) {
+	const (
+		address = `"address": "0x00000000000000000000000000000000000000aa"`
+		number  = `"blockNumber": "0x11"`
+		txHash  = `"transactionHash": "0x00000000000000000000000000000000000000000000000000000000000000cc"`
+		topics  = `"topics": ["0x00000000000000000000000000000000000000000000000000000000000000dd"]`
+		data    = `"data": "0x01"`
+		index   = `"logIndex": "0x2"`
+		zeros   = `"address": "0x0000000000000000000000000000000000000000", "blockNumber": "0x0", ` +
+			`"transactionHash": "0x0000000000000000000000000000000000000000000000000000000000000000", ` +
+			`"topics": [], "data": "0x", "logIndex": "0x0"`
+	)
+	log := func(omit string) string {
+		var members []string
+		for _, member := range []string{address, number, txHash, topics, data, index} {
+			if member != omit {
+				members = append(members, member)
+			}
+		}
+		return `[{` + strings.Join(members, ", ") + `}]`
+	}
+	for _, test := range []struct {
+		result string
+		// logs is the number of logs, or -1 if the result isn't an answer.
+		logs int
+	}{
+		{`[null]`, -1},
+		{`[{}]`, -1},
+		{log(address), -1},
+		{log(number), -1},
+		{log(txHash), -1},
+		{log(topics), -1},
+		{log(data), -1},
+		{log(index), -1},
+		{`[{` + address + `, ` + number + `, "transactionHash": null, ` + topics + `, ` + data + `, ` + index + `}]`, -1},
+		{`[{` + address + `, ` + number + `, ` + txHash + `, "topics": null, ` + data + `, ` + index + `}]`, -1},
+		{`[{` + address + `, ` + number + `, ` + txHash + `, ` + topics + `, "data": null, ` + index + `}]`, -1},
+		{`[{` + address + `, ` + number + `, ` + txHash + `, ` + topics + `, ` + data + `, "logIndex": null}]`, -1},
+		{`[]`, 0},
+		{log(""), 1},
+		{`[{` + zeros + `}]`, 1},
+	} {
+		url, _ := node(t, "0x1", func(w http.ResponseWriter, id uint64) {
+			fmt.Fprintf(w, `{"jsonrpc": "2.0", "id": %d, "result": %s}`, id, test.result)
+		})
+		client := connect(t, url)
+		logs, err := client.GetLogs(t.Context(), LogFilter{})
+		if test.logs < 0 && err == nil || test.logs >= 0 && (err != nil || len(logs) != test.logs) {
+			t.Errorf("GetLogs of the result %s: got %d logs, %v; want %d", test.result, len(logs), err, test.logs)
+		}
+		scanned, scanErr := 0, error(nil)
+		for _, err := range client.ScanLogs(t.Context(), LogFilter{FromBlock: 1, ToBlock: 1}) {
+			if err != nil {
+				scanErr = err
+				break
+			}
+			scanned++
+		}
+		if test.logs < 0 && scanErr == nil || test.logs >= 0 && (scanErr != nil || scanned != test.logs) {
+			t.Errorf("ScanLogs of the result %s: got %d logs, %v; want %d", test.result, scanned, scanErr, test.logs)
+		}
+	}
+}
+
 // fastRateLimitRetries makes the retries of rate-limited requests quick for a
 // test.
 func fastRateLimitRetries(t *testing.T) {

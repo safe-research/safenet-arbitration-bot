@@ -110,7 +110,7 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 	}
 
 	if d.Service != nil {
-		tx, err := d.Service.Transaction(ctx, e.SafeTxHash)
+		x, err := d.Service.Transaction(ctx, e.SafeTxHash)
 		// A service that fails says nothing about the transaction, as a node doesn't.
 		if txservice.Unavailable(err) {
 			d.fail(fmt.Errorf("getting Safe transaction %s from the Safe Transaction Service: %w", e.SafeTxHash, err))
@@ -119,8 +119,8 @@ func (d *decoder) decodeSources(ctx context.Context, i int) (Source, *safenet.Sa
 		if err != nil && !errors.Is(err, txservice.ErrNotFound) {
 			d.warn(fmt.Errorf("getting Safe transaction %s from the Safe Transaction Service: %w", e.SafeTxHash, err))
 		}
-		if err == nil && matches(tx, e.SafeTxHash) {
-			return SourceService, tx
+		if err == nil && matches(x.Transaction, e.SafeTxHash) {
+			return SourceService, x.Transaction
 		}
 	}
 	if nonceErr != nil {
@@ -208,7 +208,7 @@ func (d *decoder) nonceAt(ctx context.Context, block uint64) (*big.Int, error) {
 	next, ok := d.nexts[block]
 	if !ok {
 		var err error
-		next, err = d.readNonce(ctx, d.safe, ethrpc.BlockNumber(block))
+		next, err = d.ReadNonce(ctx, d.safe, ethrpc.BlockNumber(block))
 		if err != nil {
 			d.warn(err)
 		}

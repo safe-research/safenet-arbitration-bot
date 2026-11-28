@@ -42,6 +42,7 @@ var commands = map[string]struct {
 	"pending":         {pending, "list the disputed Safenet requests awaiting arbitration"},
 	"safe":            {safeCommand, "show the settings of the Safe of a Safenet request, or of another Safe on its chain"},
 	"simulate":        {simulateCommand, "simulate the Safe transaction of a Safenet request at its Safe block"},
+	"status":          {statusCommand, "report whether the Safe transaction of a Safenet request was executed, or another with its nonce"},
 	"signatures":      {signaturesCommand, "list the functions of a contract on the Safe's chain of a Safenet request"},
 	"tags":            {tags, "list the tags of a ruling in the rulings corpus"},
 	"transfers":       {transfers, "list the transfers out of, or into, the Safe of a Safenet request"},
