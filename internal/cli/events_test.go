@@ -11,6 +11,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 )
 
 const (
@@ -19,6 +22,7 @@ const (
 	txLater    = "0x00000000000000000000000000000000000000000000000000000000000000a3"
 	txLying    = "0x00000000000000000000000000000000000000000000000000000000000000a4"
 	txUnknown  = "0x00000000000000000000000000000000000000000000000000000000000000a5"
+	txNoTime   = "0x00000000000000000000000000000000000000000000000000000000000000a6"
 
 	transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 	alice         = "0x00000000000000000000000000000000000000a1"
@@ -51,15 +55,17 @@ func receipt(hash string, block int, status string) map[string]any {
 	}
 }
 
-// receiptNode starts an Ethereum Mainnet node with the receipts, and returns
-// the path of a configuration file for it.
+// receiptNode starts an Ethereum Mainnet node with the receipts, and the
+// headers of the blocks other than 98, which it fails to serve with HTTP status
+// 500, as an overloaded node does. It returns the path of a configuration file
+// for it.
 func receiptNode(t *testing.T, receipts map[string]any) string {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID     uint64   `json:"id"`
-			Method string   `json:"method"`
-			Params []string `json:"params"`
+			ID     uint64 `json:"id"`
+			Method string `json:"method"`
+			Params []any  `json:"params"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		res := map[string]any{"jsonrpc": "2.0", "id": req.ID}
@@ -67,7 +73,15 @@ func receiptNode(t *testing.T, receipts map[string]any) string {
 		case "eth_chainId":
 			res["result"] = "0x1"
 		case "eth_getTransactionReceipt":
-			res["result"] = receipts[req.Params[0]]
+			res["result"] = receipts[req.Params[0].(string)]
+		case "eth_getBlockByNumber":
+			var number ethrpc.BlockNumber
+			number.UnmarshalText([]byte(req.Params[0].(string)))
+			if number == 98 {
+				http.Error(w, "overloaded", http.StatusInternalServerError)
+				return
+			}
+			res["result"] = fakeHeader(number)
 		default:
 			res["error"] = map[string]any{"code": -32601, "message": "method not found"}
 		}
@@ -87,7 +101,8 @@ func TestEvents(t *testing.T) {
 		txReverted: receipt(txReverted, 99, "0x0"),
 		txLater:    receipt(txLater, 101, "0x1"),
 		// A node that answers with another transaction's receipt.
-		txLying: receipt(txSuccess, 100, "0x1"),
+		txLying:  receipt(txSuccess, 100, "0x1"),
+		txNoTime: receipt(txNoTime, 98, "0x1"),
 	})
 	request := filepath.Join(t.TempDir(), "request.json")
 	if err := os.WriteFile(request, []byte(`{"proposal": {"safeBlock": 100, "transaction": {"chainId": 1}}}`), 0o644); err != nil {
@@ -106,6 +121,7 @@ func TestEvents(t *testing.T) {
 		}
 		var got struct {
 			ChainID, SafeBlock, Block uint64
+			BlockTime                 time.Time
 			TxHash, Status            string
 			Events                    []struct {
 				LogIndex uint64
@@ -123,7 +139,8 @@ func TestEvents(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 			t.Fatalf("decoding %s: %v", stdout, err)
 		}
-		if got.ChainID != 1 || got.SafeBlock != 100 || got.Block != 100 || got.Status != "success" || !strings.EqualFold(got.TxHash, txSuccess) || len(got.Events) != 2 {
+		if got.ChainID != 1 || got.SafeBlock != 100 || got.Block != 100 || !got.BlockTime.Equal(fakeBlockTime(100)) || got.Status != "success" ||
+			!strings.EqualFold(got.TxHash, txSuccess) || len(got.Events) != 2 {
 			t.Fatalf("events: got %+v", got)
 		}
 		transfer := got.Events[0].Event
@@ -145,7 +162,7 @@ func TestEvents(t *testing.T) {
 			t.Fatalf("events: status %d, stderr %q", code, stderr)
 		}
 		for _, want := range []string{
-			`(?m)^Transaction ` + txSuccess + ` on chain 1, in block 100 \(success\)$`,
+			`(?m)^Transaction ` + txSuccess + ` on chain 1, in block 100 at ` + fakeBlockTime(100).Format(time.RFC3339) + ` \(success\)$`,
 			`(?m)^Log 0, emitted by 0x[0-9a-fA-F]{38}[cC]3$`,
 			`(?m)^  Event  Transfer\(address,address,uint256\)$`,
 			`(?m)^    value = 7$`,
@@ -163,6 +180,13 @@ func TestEvents(t *testing.T) {
 		code, stdout, stderr := run("-request-file", request, txReverted)
 		if code != 0 || !strings.Contains(stdout, "(reverted)") || !strings.Contains(stdout, "no events") {
 			t.Errorf("events: got status %d, stdout %q, stderr %q, want a reverted transaction without events", code, stdout, stderr)
+		}
+	})
+
+	t.Run("time unavailable", func(t *testing.T) {
+		code, stdout, stderr := run("-request-file", request, txNoTime)
+		if code != 1 || stdout != "" || !strings.Contains(stderr, "reading the time of block 98") || !strings.Contains(stderr, "run the command again later") {
+			t.Errorf("events: got status %d, stdout %q, stderr %q; want 1, and that the time of block 98 failed", code, stdout, stderr)
 		}
 	})
 

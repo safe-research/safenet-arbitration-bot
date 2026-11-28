@@ -81,12 +81,18 @@ type historyChain struct {
 	nonce     *big.Int
 	stateFrom uint64
 	// failingBlocks are the blocks whose logs the node fails to serve with HTTP
-	// status 500, as an overloaded node does.
-	failingBlocks []uint64
+	// status 500, as an overloaded node does, and failingHeaders those whose
+	// headers it fails to serve so.
+	failingBlocks  []uint64
+	failingHeaders []uint64
+	// codeFrom is the first block at which the Safe has code, if set.
+	codeFrom uint64
 
 	mu sync.Mutex
 	// ranges are the block ranges of the eth_getLogs requests, in order.
 	ranges [][2]uint64
+	// headers are the numbers of eth_getBlockByNumber requests, by block.
+	headers map[uint64]int
 }
 
 func (c *historyChain) serve(t *testing.T) string {
@@ -129,6 +135,31 @@ func (c *historyChain) serve(t *testing.T) string {
 				}
 			}
 			res["result"] = logs
+		case "eth_getBlockByNumber":
+			var number ethrpc.BlockNumber
+			json.Unmarshal(req.Params[0], &number)
+			if slices.Contains(c.failingHeaders, uint64(number)) {
+				http.Error(w, "overloaded", http.StatusInternalServerError)
+				return
+			}
+			c.mu.Lock()
+			if c.headers == nil {
+				c.headers = make(map[uint64]int)
+			}
+			c.headers[uint64(number)]++
+			c.mu.Unlock()
+			res["result"] = fakeHeader(number)
+		case "eth_getCode":
+			var block ethrpc.BlockNumber
+			json.Unmarshal(req.Params[1], &block)
+			switch {
+			case c.codeFrom == 0:
+				res["error"] = map[string]any{"code": -32601, "message": "method not found"}
+			case uint64(block) < c.codeFrom:
+				res["result"] = "0x"
+			default:
+				res["result"] = "0x6080"
+			}
 		case "eth_call":
 			var call ethrpc.CallRequest
 			var block ethrpc.BlockNumber
@@ -153,6 +184,17 @@ func (c *historyChain) serve(t *testing.T) string {
 	}))
 	t.Cleanup(server.Close)
 	return server.URL
+}
+
+// fakeHeader returns the header of block number of a fake node, whose blocks
+// are 12 seconds apart, as on Ethereum Mainnet.
+func fakeHeader(number ethrpc.BlockNumber) map[string]any {
+	return map[string]any{"number": number, "hash": ethrpc.Hash{}, "timestamp": ethrpc.Quantity(fakeBlockTime(number).Unix())}
+}
+
+// fakeBlockTime returns the timestamp of block number of a fake node.
+func fakeBlockTime(number ethrpc.BlockNumber) time.Time {
+	return time.Unix(1_700_000_000+12*int64(number), 0).UTC()
 }
 
 // historyService is a fake Safe Transaction Service for Ethereum Mainnet that
@@ -299,9 +341,10 @@ func TestTransfersAll(t *testing.T) {
 		FromBlock *uint64 `json:"fromBlock"`
 		ToBlock   uint64  `json:"toBlock"`
 		Transfers []struct {
-			Block uint64         `json:"block"`
-			To    ethrpc.Address `json:"to"`
-			Value *big.Int       `json:"value"`
+			Block     uint64         `json:"block"`
+			BlockTime time.Time      `json:"blockTime"`
+			To        ethrpc.Address `json:"to"`
+			Value     *big.Int       `json:"value"`
 		} `json:"transfers"`
 		Service *struct {
 			URL        string `json:"url"`
@@ -316,8 +359,9 @@ func TestTransfersAll(t *testing.T) {
 	}
 	// It reads the blocks that the service names rather than a range, so it has no
 	// first block.
-	if got.FromBlock != nil || got.ToBlock != 200 || len(got.Transfers) != 1 || got.Transfers[0].Block != 100 || got.Transfers[0].Value.Int64() != 5 {
-		t.Errorf("transfers -all: got %s, want the transfer to alice in block 100, up to block 200", stdout.String())
+	if got.FromBlock != nil || got.ToBlock != 200 || len(got.Transfers) != 1 || got.Transfers[0].Block != 100 || got.Transfers[0].Value.Int64() != 5 ||
+		!got.Transfers[0].BlockTime.Equal(fakeBlockTime(100)) {
+		t.Errorf("transfers -all: got %s, want the transfer to alice in block 100, with its time, up to block 200", stdout.String())
 	}
 	if s := got.Service; s == nil || s.URL != serviceURL || s.ObservedAt == "" || s.Listed != 2 || s.Blocks != 2 || s.Unmatched != 1 {
 		t.Errorf("transfers -all: got service %+v, want 2 listed in 2 blocks, 1 unmatched", s)
@@ -366,7 +410,7 @@ func TestTransfersAll(t *testing.T) {
 	matchLines(t, "transfers -all", stdout.Bytes(),
 		`^ERC-20 transfers from `+historySafe.String()+` on chain 1, up to block 200, in the blocks with transfers that the Safe Transaction Service lists: 2$`,
 		`^Listed by the Safe Transaction Service "`+regexp.QuoteMeta(serviceURL)+`", observed \S+Z: 2, not in the logs of their blocks: 1$`,
-		`^100 +`+hashOf(1).String()+` +`,
+		`^100 +`+fakeBlockTime(100).Format(time.RFC3339)+` +`+hashOf(1).String()+` +`,
 	)
 
 	// Without a service, -all fails and says so.
@@ -415,6 +459,57 @@ func TestTransfersAllUnmatchedOnce(t *testing.T) {
 	// Each log matches one transfer that the service lists, at its log index.
 	if got.Service.Listed != 3 || got.Service.Unmatched != 2 {
 		t.Errorf("transfers -all -in: got %d listed and %d unmatched, want 3 and 2", got.Service.Listed, got.Service.Unmatched)
+	}
+}
+
+// TestTransfersBlockTimes checks that each transfer has the time of its block,
+// whose header is read once, and that a header that the node fails to serve
+// fails the command.
+func TestTransfersBlockTimes(t *testing.T) {
+	chain := &historyChain{logs: []ethrpc.Log{
+		transferLog(historySafe, historyAlice, 5, hashOf(1), 100, 0),
+		transferLog(historySafe, historyBob, 6, hashOf(1), 100, 1),
+		transferLog(historySafe, historyAlice, 7, hashOf(2), 120, 0),
+		transferLog(historyAlice, historySafe, 9, hashOf(3), 130, 0),
+	}}
+	config, request := historyFiles(t, chain.serve(t), "")
+	code, stdout, stderr := runArbot(t, "-config", config, "transfers", "-json", "-request-file", request)
+	var got struct {
+		Transfers []struct {
+			Block     uint64    `json:"block"`
+			BlockTime time.Time `json:"blockTime"`
+		} `json:"transfers"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); code != 0 || err != nil {
+		t.Fatalf("transfers: got status %d, %v\n%s", code, err, stderr)
+	}
+	if len(got.Transfers) != 3 {
+		t.Fatalf("transfers: got %s, want 3 transfers", stdout)
+	}
+	for _, x := range got.Transfers {
+		if want := fakeBlockTime(ethrpc.BlockNumber(x.Block)); !x.BlockTime.Equal(want) {
+			t.Errorf("transfers: got the time %s for block %d, want %s", x.BlockTime, x.Block, want)
+		}
+	}
+	if want := map[uint64]int{100: 1, 120: 1}; !reflect.DeepEqual(chain.headers, want) {
+		t.Errorf("transfers: read the headers %v, want %v", chain.headers, want)
+	}
+
+	_, stdout, _ = runArbot(t, "-config", config, "transfers", "-request-file", request)
+	matchLines(t, "transfers", []byte(stdout),
+		`^BLOCK +TIME +TRANSACTION +TOKEN +TO +VALUE$`,
+		`^120 +`+fakeBlockTime(120).Format(time.RFC3339)+` +`+hashOf(2).String()+` +`+historyToken.String()+` +`+historyAlice.String()+` +7$`,
+	)
+	_, stdout, _ = runArbot(t, "-config", config, "transfers", "-in", "-request-file", request)
+	matchLines(t, "transfers -in", []byte(stdout),
+		`^BLOCK +TIME +TRANSACTION +TYPE +TOKEN +FROM +VALUE$`,
+		`^130 +`+fakeBlockTime(130).Format(time.RFC3339)+` +`+hashOf(3).String()+` +erc20 +`+historyToken.String()+` +`+historyAlice.String()+` +9$`,
+	)
+
+	chain.failingHeaders = []uint64{100}
+	code, stdout, stderr = runArbot(t, "-config", config, "transfers", "-request-file", request)
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "reading the time of block 100") || !strings.Contains(stderr, "run the command again later") {
+		t.Errorf("transfers with a failing node: got status %d, stdout %q, stderr %q; want 1, and that the time of block 100 failed", code, stdout, stderr)
 	}
 }
 

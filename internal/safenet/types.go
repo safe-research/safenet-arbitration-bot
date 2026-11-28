@@ -81,7 +81,12 @@ type Proposal struct {
 	// against, without its own effects or later ones (Charter § 2.8 and § 3.6), and
 	// the Charter version to apply is the one at EthereumBlock.
 	EthereumBlock uint64 `json:"ethereumBlock"`
-	SafeBlock     uint64 `json:"safeBlock"`
+	// EthereumBlockTime is the timestamp of EthereumBlock, and SafeBlockTime that
+	// of SafeBlock. A request file that arbot wrote before it reported them lacks
+	// them.
+	EthereumBlockTime time.Time `json:"ethereumBlockTime,omitzero"`
+	SafeBlock         uint64    `json:"safeBlock"`
+	SafeBlockTime     time.Time `json:"safeBlockTime,omitzero"`
 	// TxHash is the hash of the Gnosis Chain transaction that made the proposal.
 	TxHash     ethrpc.Hash  `json:"txHash"`
 	Epoch      uint64       `json:"epoch"`

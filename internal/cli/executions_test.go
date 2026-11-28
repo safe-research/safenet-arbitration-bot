@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/executions"
@@ -227,6 +229,90 @@ func TestExecutionsWithoutOldState(t *testing.T) {
 	}
 }
 
+// TestExecutionsBlockTimes checks that each execution, and the creation of the
+// Safe's account, has the time of its block, whose header is read once, and
+// that a header that the node fails to serve fails the command.
+func TestExecutionsBlockTimes(t *testing.T) {
+	// Three executions, two of them in block 100. The service lists the last two,
+	// so the scan for the first starts at the block where the Safe got its code.
+	// The node only has the state of the Safe block, so the transactions come from
+	// the service.
+	executionSuccess := solabi.Event("ExecutionSuccess(bytes32,uint256)")
+	payment := solabi.Uint(big.NewInt(0))
+	var logs []ethrpc.Log
+	var listings []map[string]any
+	transactions := map[ethrpc.Hash]map[string]any{}
+	for n, block := range []uint64{100, 100, 150} {
+		tx := &safenet.SafeTransaction{
+			ChainID: big.NewInt(1), Safe: historySafe, To: historyAlice, Value: big.NewInt(int64(n)), Data: []byte{},
+			SafeTxGas: new(big.Int), BaseGas: new(big.Int), GasPrice: new(big.Int), Nonce: big.NewInt(int64(n)),
+		}
+		logs = append(logs, ethrpc.Log{
+			Address: historySafe, Topics: []ethrpc.Hash{executionSuccess, tx.Hash()}, Data: payment[:],
+			BlockNumber: ethrpc.BlockNumber(block), TransactionHash: hashOf(byte(n + 1)), LogIndex: ethrpc.Quantity(n),
+		})
+		listing := listedExecution(tx, hashOf(byte(n+1)), block)
+		transactions[tx.Hash()] = listing
+		if n > 0 {
+			listings = append(listings, listing)
+		}
+	}
+	chain := &historyChain{logs: logs, nonce: big.NewInt(3), stateFrom: 200, codeFrom: 90}
+	service := &historyService{executions: listings, transactions: transactions}
+	config, request := historyFiles(t, chain.serve(t), service.serve(t))
+	code, stdout, stderr := runArbot(t, "-config", config, "executions", "-all", "-json", "-request-file", request)
+	var got struct {
+		Executions []struct {
+			Block     uint64    `json:"block"`
+			BlockTime time.Time `json:"blockTime"`
+		} `json:"executions"`
+		History struct {
+			Complete bool `json:"complete"`
+			Creation *struct {
+				Block     uint64    `json:"block"`
+				BlockTime time.Time `json:"blockTime"`
+			} `json:"creation"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); code != 0 || err != nil {
+		t.Fatalf("executions -all: got status %d, %v\n%s", code, err, stderr)
+	}
+	if len(got.Executions) != 3 || !got.History.Complete {
+		t.Fatalf("executions -all: got %s, want 3 executions and a complete history\n%s", stdout, stderr)
+	}
+	for _, x := range got.Executions {
+		if want := fakeBlockTime(ethrpc.BlockNumber(x.Block)); !x.BlockTime.Equal(want) {
+			t.Errorf("executions -all: got the time %s for block %d, want %s", x.BlockTime, x.Block, want)
+		}
+	}
+	if c := got.History.Creation; c == nil || c.Block != 90 || !c.BlockTime.Equal(fakeBlockTime(90)) {
+		t.Errorf("executions -all: got the creation %+v, want block 90 with its time", c)
+	}
+	if want := map[uint64]int{90: 1, 100: 1, 150: 1}; !reflect.DeepEqual(chain.headers, want) {
+		t.Errorf("executions -all: read the headers %v, want %v", chain.headers, want)
+	}
+
+	_, stdout, _ = runArbot(t, "-config", config, "executions", "-all", "-request-file", request)
+	matchLines(t, "executions -all", []byte(stdout),
+		`^Created in block 90 \(`+fakeBlockTime(90).Format(time.RFC3339)+`\), by a transaction that arbot doesn't bind to the account$`,
+		`^BLOCK +TIME +TRANSACTION +RESULT +`,
+		`^100 +`+fakeBlockTime(100).Format(time.RFC3339)+` +`+hashOf(2).String()+` +success +`,
+		`^150 +`+fakeBlockTime(150).Format(time.RFC3339)+` +`+hashOf(3).String()+` +success +`,
+	)
+
+	// The node fails to serve the header of an execution's block, or of the
+	// creation's.
+	for _, block := range []uint64{150, 90} {
+		chain.failingHeaders = []uint64{block}
+		code, stdout, stderr := runArbot(t, "-config", config, "executions", "-all", "-request-file", request)
+		if want := fmt.Sprintf("reading the time of block %d", block); code != 1 || stdout != "" || !strings.Contains(stderr, want) ||
+			!strings.Contains(stderr, "run the command again later") {
+			t.Errorf("executions -all without the header of block %d: got status %d, stdout %q, stderr %q; want 1, and an error containing %q",
+				block, code, stdout, stderr, want)
+		}
+	}
+}
+
 func TestExecutionsProposalBefore130(t *testing.T) {
 	// The Safe executed a transaction with the request's fields. On the 1.1.1 or
 	// 1.2.0 singleton, it logged the hash in the older domain, which isn't the
@@ -294,14 +380,16 @@ func TestNonceRanges(t *testing.T) {
 func TestWriteHistoryCreation(t *testing.T) {
 	factory := ethrpc.MustParseAddress("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67")
 	tx := ethrpc.Hash{0: 0xaa, 31: 9}
+	at := fakeBlockTime(80)
+	block := `Created in block 80 \(` + at.Format(time.RFC3339) + `\)`
 	for _, test := range []struct {
 		creation *executions.Creation
 		want     string
 	}{
 		{nil, `(?m)^Creation: unknown$`},
-		{&executions.Creation{Block: 80}, `(?m)^Created in block 80, by a transaction that arbot doesn't bind to the account$`},
-		{&executions.Creation{Block: 80, TxHash: &tx}, `(?m)^Created in block 80, transaction ` + tx.String() + ` \(contract creation\)$`},
-		{&executions.Creation{Block: 80, TxHash: &tx, Factory: &factory}, `(?m)^Created in block 80, transaction ` + tx.String() + ` \(ProxyCreation event of ` + factory.String() + `\)$`},
+		{&executions.Creation{Block: 80, BlockTime: at}, `(?m)^` + block + `, by a transaction that arbot doesn't bind to the account$`},
+		{&executions.Creation{Block: 80, BlockTime: at, TxHash: &tx}, `(?m)^` + block + `, transaction ` + tx.String() + ` \(contract creation\)$`},
+		{&executions.Creation{Block: 80, BlockTime: at, TxHash: &tx, Factory: &factory}, `(?m)^` + block + `, transaction ` + tx.String() + ` \(ProxyCreation event of ` + factory.String() + `\)$`},
 	} {
 		var stdout bytes.Buffer
 		report := &executionsReport{ChainID: 1, ToBlock: 200, History: &historyReport{Nonce: big.NewInt(0), Creation: test.creation}}

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math/big"
 	"slices"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/checks"
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
@@ -550,6 +551,9 @@ type Creation struct {
 	// Block is the block whose transaction gave the account its code: it has no
 	// code at the block before, and has code at Block.
 	Block uint64 `json:"block"`
+	// BlockTime is the timestamp of Block. FindAll leaves it zero, for the caller
+	// to set.
+	BlockTime time.Time `json:"blockTime,omitzero"`
 	// TxHash is the transaction that the service says created the account, if the
 	// chain binds it to the account: its receipt names the account as the contract
 	// that it created, or has the account's ProxyCreation event from an official

@@ -103,10 +103,10 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "too. A nonce that the node fails to read, such as at a block whose state it doesn't keep, leaves them\n")
 		fmt.Fprintf(out, "out with a warning, and fails the command only if no other source has the transaction. Otherwise, a\n")
 		fmt.Fprintf(out, "transaction that no source has is an unknown transaction, or null with -json.\n")
-		fmt.Fprintf(out, "The text output is a table of the block, onchain transaction, result, Safe transaction hash, source,\n")
-		fmt.Fprintf(out, "nonce, target, value, and operation of each execution, and the selector and length of its data, and\n")
-		fmt.Fprintf(out, "-json has all of it. The execution of the request's own Safe transaction, if it was executed by the\n")
-		fmt.Fprintf(out, "Safe block, is marked, since its effects aren't evidence (§ 3.6).\n\n")
+		fmt.Fprintf(out, "The text output is a table of the block, its time, onchain transaction, result, Safe transaction hash,\n")
+		fmt.Fprintf(out, "source, nonce, target, value, and operation of each execution, and the selector and length of its\n")
+		fmt.Fprintf(out, "data, and -json has all of it. The execution of the request's own Safe transaction, if it was executed\n")
+		fmt.Fprintf(out, "by the Safe block, is marked, since its effects aren't evidence (§ 3.6).\n\n")
 		fmt.Fprintf(out, "With -calls, it also lists the calls that each known transaction makes, as arbot calls lists those\n")
 		fmt.Fprintf(out, "of a request's transaction, with the accounts that they are to as of the request's Safe block: delegate\n")
 		fmt.Fprintf(out, "calls to MultiSend contracts decoded into their calls, and each call's data decoded as a well-known\n")
@@ -151,6 +151,8 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "itself is only reported if it is bound to the account: its receipt names the account as the contract\n")
 		fmt.Fprintf(out, "that it created, or has the account's ProxyCreation event from an official 1.0.0, 1.1.1, 1.3.0, 1.4.1,\n")
 		fmt.Fprintf(out, "or 1.5.0 proxy factory.\n\n")
+		fmt.Fprintf(out, "Each execution, and with -all the creation, has the time of its block. The command reads the header of\n")
+		fmt.Fprintf(out, "each such block once, and fails if it can't.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 0); err != nil {
@@ -191,6 +193,19 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		var err error
 		if found, err = finder.Find(ctx, ref.Safe, ethrpc.BlockNumber(*fromBlock), ethrpc.BlockNumber(ref.SafeBlock)); err != nil {
 			return err
+		}
+	}
+	// The client reads each block's header once, for all of its executions and the
+	// creation.
+	for i := range found {
+		x := &found[i]
+		if x.BlockTime, err = ref.eth.BlockTime(ctx, ethrpc.BlockNumber(x.Block)); err != nil {
+			return fmt.Errorf("reading the time of block %d: %w", x.Block, err)
+		}
+	}
+	if h := report.History; h != nil && h.Creation != nil {
+		if h.Creation.BlockTime, err = ref.eth.BlockTime(ctx, ethrpc.BlockNumber(h.Creation.Block)); err != nil {
+			return fmt.Errorf("reading the time of block %d, where the Safe's account was created: %w", h.Creation.Block, err)
 		}
 	}
 	report.Executions = make([]execution, len(found))
@@ -282,11 +297,11 @@ func writeHistory(e *env, report *executionsReport) {
 	case c == nil:
 		fmt.Fprintf(e.stdout, "Creation: unknown\n")
 	case c.TxHash == nil:
-		fmt.Fprintf(e.stdout, "Created in block %d, by a transaction that arbot doesn't bind to the account\n", c.Block)
+		fmt.Fprintf(e.stdout, "Created in block %d (%s), by a transaction that arbot doesn't bind to the account\n", c.Block, c.BlockTime.Format(time.RFC3339))
 	case c.Factory != nil:
-		fmt.Fprintf(e.stdout, "Created in block %d, transaction %s (ProxyCreation event of %s)\n", c.Block, *c.TxHash, c.Factory)
+		fmt.Fprintf(e.stdout, "Created in block %d (%s), transaction %s (ProxyCreation event of %s)\n", c.Block, c.BlockTime.Format(time.RFC3339), *c.TxHash, c.Factory)
 	default:
-		fmt.Fprintf(e.stdout, "Created in block %d, transaction %s (contract creation)\n", c.Block, *c.TxHash)
+		fmt.Fprintf(e.stdout, "Created in block %d (%s), transaction %s (contract creation)\n", c.Block, c.BlockTime.Format(time.RFC3339), *c.TxHash)
 	}
 	fmt.Fprintln(e.stdout)
 }
@@ -294,13 +309,13 @@ func writeHistory(e *env, report *executionsReport) {
 // writeExecutions writes a table of executions.
 func writeExecutions(e *env, found []executions.Execution) error {
 	w := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "BLOCK\tTRANSACTION\tRESULT\tSAFE TX HASH\tSOURCE\tNONCE\tTO\tVALUE\tOPERATION\tDATA")
+	fmt.Fprintln(w, "BLOCK\tTIME\tTRANSACTION\tRESULT\tSAFE TX HASH\tSOURCE\tNONCE\tTO\tVALUE\tOPERATION\tDATA")
 	for _, x := range found {
 		result := "failure"
 		if x.Success {
 			result = "success"
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t", x.Block, x.TxHash, result, x.SafeTxHash)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t", x.Block, x.BlockTime.Format(time.RFC3339), x.TxHash, result, x.SafeTxHash)
 		if tx := x.Transaction; tx != nil {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", x.Source, tx.Nonce, tx.To, tx.Value, tx.Operation, summarizeData(tx.Data))
 		} else {

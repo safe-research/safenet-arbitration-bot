@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/safenet"
@@ -105,7 +106,7 @@ func historyServiceWith(t *testing.T, listings []listing, transactions map[ethrp
 // executed returns what Find reports about an execution of tx in the onchain
 // transaction hash at block, from source.
 func executed(tx *safenet.SafeTransaction, hash ethrpc.Hash, block uint64, source Source) Execution {
-	return Execution{block, hash, 0, tx.Hash(), true, big.NewInt(9), source, tx}
+	return Execution{block, time.Time{}, hash, 0, tx.Hash(), true, big.NewInt(9), source, tx}
 }
 
 // checkExecutions reports the executions in got that differ from want. They are
@@ -564,7 +565,7 @@ func TestFindAllFromCreation(t *testing.T) {
 		t.Fatalf("FindAll: %v", err)
 	}
 	if !got.Complete() || len(got.Executions) != 2 || !reflect.DeepEqual(got.Scanned, []BlockRange{{80, 100}}) ||
-		!reflect.DeepEqual(got.Creation, &Creation{80, &creation, nil}) {
+		!reflect.DeepEqual(got.Creation, &Creation{80, time.Time{}, &creation, nil}) {
 		t.Errorf("FindAll: got %+v; want two executions, from scanning blocks 80 to 100, and the creation at block 80", got)
 	}
 }
@@ -1406,16 +1407,16 @@ func TestCreationFromService(t *testing.T) {
 		want     *Creation
 		warning  string
 	}{
-		{"by a 1.4.1 factory", 100, []ethrpc.Hash{hash(1)}, created, &Creation{100, &creation, &factory141}, ""},
-		{"by a 1.3.0 factory", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation(factory130, safe, false)), &Creation{100, &creation, &factory130}, ""},
-		{"by a 1.1.1 factory", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation111(factory111, safe)), &Creation{100, &creation, &factory111}, ""},
-		{"by a contract creation", 100, []ethrpc.Hash{hash(1)}, receipt(&safe), &Creation{100, &creation, nil}, ""},
+		{"by a 1.4.1 factory", 100, []ethrpc.Hash{hash(1)}, created, &Creation{100, time.Time{}, &creation, &factory141}, ""},
+		{"by a 1.3.0 factory", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation(factory130, safe, false)), &Creation{100, time.Time{}, &creation, &factory130}, ""},
+		{"by a 1.1.1 factory", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation111(factory111, safe)), &Creation{100, time.Time{}, &creation, &factory111}, ""},
+		{"by a contract creation", 100, []ethrpc.Hash{hash(1)}, receipt(&safe), &Creation{100, time.Time{}, &creation, nil}, ""},
 		// The service names another transaction of the block, which the code alone
 		// can't tell from the creation.
-		{"another transaction", 100, []ethrpc.Hash{hash(1)}, receipt(nil), &Creation{100, nil, nil}, unbound},
-		{"another contract's ProxyCreation", 100, []ethrpc.Hash{hash(1)}, receipt(&target, proxyCreation(relayer, safe, true)), &Creation{100, nil, nil}, unbound},
-		{"a factory's ProxyCreation of another proxy", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation(factory130, target, false)), &Creation{100, nil, nil}, unbound},
-		{"another contract's ProxyCreation of the proxy alone", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation111(relayer, safe)), &Creation{100, nil, nil}, unbound},
+		{"another transaction", 100, []ethrpc.Hash{hash(1)}, receipt(nil), &Creation{100, time.Time{}, nil, nil}, unbound},
+		{"another contract's ProxyCreation", 100, []ethrpc.Hash{hash(1)}, receipt(&target, proxyCreation(relayer, safe, true)), &Creation{100, time.Time{}, nil, nil}, unbound},
+		{"a factory's ProxyCreation of another proxy", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation(factory130, target, false)), &Creation{100, time.Time{}, nil, nil}, unbound},
+		{"another contract's ProxyCreation of the proxy alone", 100, []ethrpc.Hash{hash(1)}, receipt(nil, proxyCreation111(relayer, safe)), &Creation{100, time.Time{}, nil, nil}, unbound},
 		{"code before", 90, []ethrpc.Hash{hash(1)}, created, nil, "has code at block 99"},
 		{"no code", 0, []ethrpc.Hash{hash(1)}, created, nil, "no code at block 100"},
 		{"later", 100, []ethrpc.Hash{hash(1)}, map[ethrpc.Hash]ethrpc.Receipt{hash(1): {BlockNumber: last + 1}}, nil, ""},

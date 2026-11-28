@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/safe-research/safenet-arbitration-bot/internal/ethrpc"
 	"github.com/safe-research/safenet-arbitration-bot/internal/events"
@@ -17,6 +18,7 @@ type eventsReport struct {
 	SafeBlock uint64      `json:"safeBlock"`
 	TxHash    ethrpc.Hash `json:"txHash"`
 	Block     uint64      `json:"block"`
+	BlockTime time.Time   `json:"blockTime"`
 	// Status is "success", or "reverted" for a transaction that has no events.
 	Status string         `json:"status"`
 	From   ethrpc.Address `json:"from"`
@@ -50,11 +52,11 @@ func eventsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "Usage: %s events [flags] -request-file <path> <transaction-hash>\n\n", e.progname)
 		fmt.Fprintf(out, "Lists the events that a transaction logged, from the Safe's chain of a request, as of the request's\n")
 		fmt.Fprintf(out, "Safe block. It fails for a transaction in a later block, whose events aren't evidence of the\n")
-		fmt.Fprintf(out, "proposal. It reports each log with its emitter, topics, and data, and, if it is a well-known event of\n")
-		fmt.Fprintf(out, "an ERC-20 or ERC-721 token, WETH, or a Safe, its name and arguments. A log is decoded by its\n")
-		fmt.Fprintf(out, "signature only, and any contract can emit a log with the signature of a well-known event, so check the\n")
-		fmt.Fprintf(out, "emitter. A transaction that reverted has no events. The text output shortens long data, and -json\n")
-		fmt.Fprintf(out, "has all of it.\n\n")
+		fmt.Fprintf(out, "proposal. It reports the time of the transaction's block, and each log with its emitter, topics, and\n")
+		fmt.Fprintf(out, "data, and, if it is a well-known event of an ERC-20 or ERC-721 token, WETH, or a Safe, its name and\n")
+		fmt.Fprintf(out, "arguments. A log is decoded by its signature only, and any contract can emit a log with the signature\n")
+		fmt.Fprintf(out, "of a well-known event, so check the emitter. A transaction that reverted has no events. The text\n")
+		fmt.Fprintf(out, "output shortens long data, and -json has all of it.\n\n")
 		flags.PrintDefaults()
 	}
 	if err := parse(flags, args, 1); err != nil {
@@ -79,9 +81,13 @@ func eventsCommand(ctx context.Context, e *env, args []string) error {
 	if uint64(receipt.BlockNumber) > safe.SafeBlock {
 		return fmt.Errorf("transaction %s is in block %d of chain %d, after the request's Safe block %d", hash, receipt.BlockNumber, safe.ChainID, safe.SafeBlock)
 	}
+	blockTime, err := safe.eth.BlockTime(ctx, receipt.BlockNumber)
+	if err != nil {
+		return fmt.Errorf("reading the time of block %d: %w", receipt.BlockNumber, err)
+	}
 
 	report := eventsReport{
-		ChainID: safe.ChainID, SafeBlock: safe.SafeBlock, TxHash: hash, Block: uint64(receipt.BlockNumber),
+		ChainID: safe.ChainID, SafeBlock: safe.SafeBlock, TxHash: hash, Block: uint64(receipt.BlockNumber), BlockTime: blockTime,
 		Status: "reverted", From: receipt.From, To: receipt.To, Events: []eventLog{},
 	}
 	if receipt.Status == 1 {
@@ -96,7 +102,7 @@ func eventsCommand(ctx context.Context, e *env, args []string) error {
 	if *asJSON {
 		return writeJSON(e.stdout, report)
 	}
-	fmt.Fprintf(e.stdout, "Transaction %s on chain %d, in block %d (%s)\n", report.TxHash, report.ChainID, report.Block, report.Status)
+	fmt.Fprintf(e.stdout, "Transaction %s on chain %d, in block %d at %s (%s)\n", report.TxHash, report.ChainID, report.Block, report.BlockTime.Format(time.RFC3339), report.Status)
 	fmt.Fprintf(e.stdout, "  From  %s\n", report.From)
 	if report.To != nil {
 		fmt.Fprintf(e.stdout, "  To    %s\n", report.To)
