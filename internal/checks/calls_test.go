@@ -37,6 +37,11 @@ func TestCalls(t *testing.T) {
 		call{to: safe, value: big.NewInt(1), data: ethrpc.Bytes{}, operation: safenet.OperationCall},
 	)
 	multiSendData := func(transactions []byte) ethrpc.Bytes { return solabi.Call(multiSendSelector, transactions) }
+	// deep is a delegate call to MultiSend whose batches nest too deep to expand.
+	deep := call{to: token, value: new(big.Int), data: approve, operation: safenet.OperationCall}
+	for range maxNesting + 1 {
+		deep = call{to: multiSend141, value: new(big.Int), data: multiSendData(pack(deep)), operation: safenet.OperationDelegateCall}
+	}
 
 	codeHash := func(code []byte) ethrpc.Hash { return ethrpc.Hash(keccak256.Hash(code)) }
 	version := func(v string) *string { return &v }
@@ -119,6 +124,16 @@ func TestCalls(t *testing.T) {
 			calls: []Call{{
 				Kind: "root", Placeholder: "empty", To: contract(multiSend141, "MultiSend", "1.4.1"), Value: new(big.Int),
 				Operation: safenet.OperationDelegateCall, Data: multiSendData([]byte{}),
+			}},
+		},
+		{
+			name:   "unexpanded MultiSend",
+			tx:     safenet.SafeTransaction{To: multiSend141, Data: deep.data, Operation: safenet.OperationDelegateCall},
+			safe:   mainnetSafe,
+			target: contract(multiSend141, "MultiSend", "1.4.1"),
+			calls: []Call{{
+				Kind: "root", Placeholder: "unexpanded", To: contract(multiSend141, "MultiSend", "1.4.1"), Value: new(big.Int),
+				Operation: safenet.OperationDelegateCall, Data: deep.data,
 			}},
 		},
 		{

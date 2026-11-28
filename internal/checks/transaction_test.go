@@ -72,7 +72,7 @@ func TestComponents(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := components(&request(test.tx).Proposal.Transaction)
+			got, err := components(t.Context(), &request(test.tx).Proposal.Transaction, identifiedExcept())
 			if err != nil {
 				t.Fatal(err)
 			}
