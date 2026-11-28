@@ -227,6 +227,56 @@ func TestExecutionsWithoutOldState(t *testing.T) {
 	}
 }
 
+func TestExecutionsProposalBefore130(t *testing.T) {
+	// The Safe executed a transaction with the request's fields. On the 1.1.1 or
+	// 1.2.0 singleton, it logged the hash in the older domain, which isn't the
+	// request's Safe transaction hash, so it is another Safe transaction, while on
+	// a later one, it is the request's own.
+	executionSuccess := solabi.Event("ExecutionSuccess(bytes32,uint256)")
+	payment := solabi.Uint(big.NewInt(0))
+	tx := &safenet.SafeTransaction{
+		ChainID: big.NewInt(1), Safe: historySafe, To: historyAlice, Value: big.NewInt(1), Data: []byte{},
+		SafeTxGas: new(big.Int), BaseGas: new(big.Int), GasPrice: new(big.Int), Nonce: new(big.Int),
+	}
+	for _, test := range []struct {
+		name     string
+		logged   ethrpc.Hash
+		proposal bool
+	}{
+		{"before 1.3.0", tx.LegacyHash(), false},
+		{"1.3.0", tx.Hash(), true},
+	} {
+		listing := listedExecution(tx, hashOf(1), 100)
+		listing["safeTxHash"] = test.logged
+		service := &historyService{executions: []map[string]any{listing}, transactions: map[ethrpc.Hash]map[string]any{test.logged: listing}}
+		chain := &historyChain{nonce: big.NewInt(1), logs: []ethrpc.Log{{
+			Address: historySafe, Topics: []ethrpc.Hash{executionSuccess}, Data: append(test.logged[:], payment[:]...),
+			BlockNumber: 100, TransactionHash: hashOf(1),
+		}}}
+		config, _ := historyFiles(t, chain.serve(t), service.serve(t))
+		request := filepath.Join(t.TempDir(), "request.json")
+		r := fmt.Appendf(nil, `{"proposal": {"safeBlock": 200, "safeTxHash": %q, "transaction": {"chainId": 1, "safe": %q}}}`, tx.Hash(), historySafe)
+		if err := os.WriteFile(request, r, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, stdout, stderr := runArbot(t, "-config", config, "executions", "-json", "-all", "-request-file", request)
+		var got struct {
+			Executions []struct {
+				Source      string                   `json:"source"`
+				Transaction *safenet.SafeTransaction `json:"transaction"`
+				Proposal    *bool                    `json:"proposal"`
+			} `json:"executions"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &got); code != 0 || err != nil {
+			t.Fatalf("%s: got status %d, %v\n%s", test.name, code, err, stderr)
+		}
+		if len(got.Executions) != 1 || got.Executions[0].Source != "service" || got.Executions[0].Transaction == nil ||
+			(got.Executions[0].Proposal != nil) != test.proposal {
+			t.Errorf("%s: got executions %+v, want the transaction from the service, the request's own: %t", test.name, got.Executions, test.proposal)
+		}
+	}
+}
+
 func TestNonceRanges(t *testing.T) {
 	for _, test := range []struct {
 		ranges []executions.NonceRange

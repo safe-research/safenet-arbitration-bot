@@ -21,7 +21,9 @@
 // worked out from the Safe's nonce, since every execution increases it by one.
 // A decoded transaction is only ever reported if its EIP-712 hash is the one
 // that the Safe logged, so a source can't misreport what was executed, however
-// much it is trusted.
+// much it is trusted. Safe 1.1.1 and 1.2.0 hash a transaction in a domain
+// without the chain ID, so either hash is accepted. Safe 1.0.0 logs nothing
+// when a transaction succeeds, so its executions aren't found.
 package executions
 
 import (
@@ -37,7 +39,8 @@ import (
 
 // The events and function of Safe 1.3.0, 1.4.1, and 1.5.0 that the package
 // reads. The signatures of ExecutionSuccess and ExecutionFailure are the same
-// in all of them, but 1.3.0 doesn't index their transaction hash.
+// in all of them, and in 1.1.1 and 1.2.0, but 1.3.0 and those before it don't
+// index their transaction hash.
 var (
 	executionSuccessEvent = solabi.Event("ExecutionSuccess(bytes32,uint256)")
 	executionFailureEvent = solabi.Event("ExecutionFailure(bytes32,uint256)")
@@ -296,9 +299,12 @@ func decodeCall(safe ethrpc.Address, chainID uint64, input []byte) *safenet.Safe
 	return tx
 }
 
-// matches reports whether tx is a Safe transaction with the hash want. It
-// doesn't hash a transaction with a missing or oversized field, which the ABI
-// encoding of the hash doesn't allow.
+// matches reports whether tx is a Safe transaction with the hash want, as Safe
+// 1.3.0 and later versions hash it, or as 1.1.1 and 1.2.0 do, in a domain
+// without the chain ID. Either proves the fields, but the older one not the
+// chain ID, which callers take from the chain that logged the hash. It doesn't
+// hash a transaction with a missing or oversized field, which the ABI encoding
+// of the hash doesn't allow.
 func matches(tx *safenet.SafeTransaction, want ethrpc.Hash) bool {
 	if tx == nil || tx.Operation > safenet.OperationDelegateCall {
 		return false
@@ -308,5 +314,5 @@ func matches(tx *safenet.SafeTransaction, want ethrpc.Hash) bool {
 			return false
 		}
 	}
-	return tx.Hash() == want
+	return tx.Hash() == want || tx.LegacyHash() == want
 }

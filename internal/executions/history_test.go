@@ -644,7 +644,7 @@ func TestFindAllNonceUnanswered(t *testing.T) {
 		// The one at nonce 1 is a delegate call, which could have changed the Safe's
 		// nonce, so without its nonce at block 110, the history isn't complete. A read
 		// that timed out says nothing about the nonce, though, so FindAll fails.
-		wantWarnings := []string{"reading the nonce of " + safe.String() + " at block 110", "at the end of 1 blocks with a delegate call or an execution by a module is unknown"}
+		wantWarnings := []string{"reading the nonce of " + safe.String() + " at block 110", "at the end of 1 blocks with a delegate call, an execution by Safe 1.1.1 or 1.2.0, or an execution by a module is unknown"}
 		if ethrpc.Transient(&rpcErr) {
 			if !ethrpc.Transient(err) || !strings.Contains(err.Error(), rpcErr.Message) {
 				t.Errorf("%v: FindAll got %+v, %v; want the node's error", &rpcErr, got, err)
@@ -998,8 +998,111 @@ func TestFindAllModuleNonceUnanswered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
 		}
-		if got.Complete() || len(warnings) != 2 || !strings.Contains(warnings[1].Error(), "at the end of 1 blocks with a delegate call or an execution by a module is unknown") {
+		if got.Complete() || len(warnings) != 2 || !strings.Contains(warnings[1].Error(), "at the end of 1 blocks with a delegate call, an execution by Safe 1.1.1 or 1.2.0, or an execution by a module is unknown") {
 			t.Errorf("%v: FindAll got %+v, warnings %v; want an incomplete history, with a warning about block 110", &rpcErr, got, warnings)
+		}
+	}
+}
+
+func TestFindAllLegacyHash(t *testing.T) {
+	// The service lists the executions of a Safe on the 1.1.1 singleton with their
+	// hashes in the older domain, which the Safe logged.
+	c := &chain{nonce: big.NewInt(2)}
+	var listings []listing
+	var want []Execution
+	for n, block := range []uint64{100, 110} {
+		tx := transaction([]string{"first", "second"}[n], int64(n))
+		tx.Operation = safenet.OperationCall
+		c.logs = append(c.logs, executionLog(executionSuccessEvent, tx.LegacyHash(), hash(byte(n+1)), false, block, 0))
+		listings = append(listings, listing{tx, tx.LegacyHash(), hash(byte(n + 1)), block})
+		e := executed(tx, hash(byte(n+1)), block, SourceService)
+		e.SafeTxHash = tx.LegacyHash()
+		want = append(want, e)
+	}
+	var warnings []error
+	f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+	got, err := f.FindAll(t.Context(), safe, 200)
+	if err != nil {
+		t.Fatalf("FindAll: %v", err)
+	}
+	checkExecutions(t, got.Executions, want)
+	if !got.Complete() || len(got.Rejected) != 0 || len(warnings) != 0 {
+		t.Errorf("FindAll got %+v, complete %t, warnings %v; want both executions confirmed, complete, no warnings", got, got.Complete(), warnings)
+	}
+}
+
+func TestFindAllNonceAfterOlderCall(t *testing.T) {
+	// The Safe executes calls at nonce 0 in block 100 and nonce 1 in block 130.
+	// Before 1.3.0, a call to the Safe itself, or one that a batch of
+	// MultiSendCallOnly makes, can run changeMasterCopy, and the singleton that it
+	// installs can set the nonce back to 0 and restore the official one, which the
+	// service hides by leaving out the execution that uses nonce 0 again in block
+	// 120, so only the Safe's nonce at the end of block 100 shows it. A Safe that
+	// logs the hashes of 1.3.0 can't, so its nonce isn't read, which the node would
+	// fail to.
+	singleton111 := ethrpc.MustParseAddress("0x34CfAC646f301356fAa8B21e94227e3583Fe3F5F")
+	callOnly := ethrpc.MustParseAddress("0x40A2aCCbd92BCA938b02010E17A5b8929b49130D")
+	changeMasterCopy := solabi.Call(solabi.Selector("changeMasterCopy(address)"), solabi.Address(target))
+	// batch is a multiSend call whose batch has one call to the Safe itself, to
+	// changeMasterCopy.
+	value, length := solabi.Uint(new(big.Int)), solabi.Uint64(uint64(len(changeMasterCopy)))
+	batch := solabi.Call(
+		solabi.Selector("multiSend(bytes)"),
+		slices.Concat([]byte{byte(safenet.OperationCall)}, safe[:], value[:], length[:], changeMasterCopy),
+	)
+	setBack := "the Safe's nonce at the end of block 100, which has an execution by Safe 1.1.1 or 1.2.0, is 0 rather than 1"
+	for _, test := range []struct {
+		name string
+		// to and operation are those of the execution at nonce 0, older is whether the
+		// Safe logs the hashes of 1.1.1 rather than 1.3.0, and again whether nonce 0 is
+		// used again in block 120.
+		to        ethrpc.Address
+		operation safenet.Operation
+		older     bool
+		again     bool
+		complete  bool
+		warning   string
+	}{
+		{"call to itself", safe, safenet.OperationCall, true, true, false, setBack},
+		{"delegate call to MultiSendCallOnly", callOnly, safenet.OperationDelegateCall, true, true, false, setBack},
+		{"kept", safe, safenet.OperationCall, true, false, true, ""},
+		{"Safe 1.3.0", safe, safenet.OperationCall, false, false, true, ""},
+		{"delegate call to MultiSendCallOnly by Safe 1.3.0", callOnly, safenet.OperationDelegateCall, false, false, true, ""},
+	} {
+		c := &chain{nonce: big.NewInt(2)}
+		hashOf := (*safenet.SafeTransaction).Hash
+		if test.older {
+			c.singletons = map[uint64]ethrpc.Address{100: singleton111, 130: singleton111}
+			hashOf = (*safenet.SafeTransaction).LegacyHash
+		} else {
+			c.erringCalls = map[uint64]ethrpc.Error{100: missingState, 130: missingState}
+		}
+		txs := []*safenet.SafeTransaction{transaction("first", 0), transaction("last", 1)}
+		txs[0].To, txs[0].Operation, txs[0].Data = test.to, test.operation, changeMasterCopy
+		if test.to == callOnly {
+			txs[0].Data = batch
+		}
+		txs[1].Operation = safenet.OperationCall
+		var listings []listing
+		for n, block := range []uint64{100, 130} {
+			c.logs = append(c.logs, executionLog(executionSuccessEvent, hashOf(txs[n]), hash(byte(n+1)), false, block, 0))
+			listings = append(listings, listing{txs[n], hashOf(txs[n]), hash(byte(n + 1)), block})
+		}
+		if test.again {
+			again := transaction("again", 0)
+			c.logs = append(c.logs, executionLog(executionSuccessEvent, hashOf(again), hash(9), false, 120, 0))
+		}
+		var warnings []error
+		f := &Finder{Eth: c.serve(t), Service: historyService(t, listings), Warn: func(err error) { warnings = append(warnings, err) }}
+		got, err := f.FindAll(t.Context(), safe, 200)
+		if err != nil {
+			t.Fatalf("%s: FindAll: %v", test.name, err)
+		}
+		if got.Complete() != test.complete || len(got.Missing) != 0 || len(got.Executions) != 2 {
+			t.Errorf("%s: FindAll got %+v, complete %t; want 2 executions, none missing, complete %t", test.name, got, got.Complete(), test.complete)
+		}
+		if test.warning == "" && len(warnings) != 0 || test.warning != "" && (len(warnings) != 1 || !strings.Contains(warnings[0].Error(), test.warning)) {
+			t.Errorf("%s: warnings %v, want %q", test.name, warnings, test.warning)
 		}
 	}
 }
@@ -1048,7 +1151,7 @@ func TestFindAllSingletonUnanswered(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: FindAll: %v", &rpcErr, err)
 		}
-		if got.Complete() || len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "at the end of 1 blocks with a delegate call or an execution by a module is unknown") {
+		if got.Complete() || len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "at the end of 1 blocks with a delegate call, an execution by Safe 1.1.1 or 1.2.0, or an execution by a module is unknown") {
 			t.Errorf("%v: FindAll got %+v, warnings %v; want an incomplete history, with a warning about block 110", &rpcErr, got, warnings)
 		}
 	}
