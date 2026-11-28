@@ -37,8 +37,9 @@ type historyReport struct {
 	// it, unless a delegate call changed it.
 	Nonce *big.Int `json:"nonce"`
 	// Complete is whether the executions account for every nonce below Nonce, and
-	// don't show that a delegate call set it back, and Missing are the ranges of
-	// those that they don't use, or null if the nonce is too large to list them.
+	// nothing shows that a delegate call or a module changed it, and Missing are
+	// the ranges of those that they don't use, or null if the nonce is too large to
+	// list them.
 	Complete bool                    `json:"complete"`
 	Missing  []executions.NonceRange `json:"missingNonces"`
 	// Scanned are the ranges of blocks whose logs were scanned for the executions
@@ -129,15 +130,16 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(out, "public node times out, is a warning, and leaves its nonces missing. The history is complete if none\n")
 		fmt.Fprintf(out, "are, the nonces of the executions found don't show that a delegate call set the nonce back, and the\n")
 		fmt.Fprintf(out, "Safe's nonce at the end of each block with a delegate call, other than to MultiSendCallOnly, which\n")
-		fmt.Fprintf(out, "only makes calls, is one above the highest nonce of the block's executions, with an official Safe\n")
-		fmt.Fprintf(out, "singleton, of a § 2.1 version or of 1.0.0, 1.1.1, or 1.2.0, as a delegate call can set the nonce, and\n")
-		fmt.Fprintf(out, "the singleton, to anything. An unknown execution, which may be such a delegate call, leaves it\n")
+		fmt.Fprintf(out, "only makes calls, or with an execution by a module, is one above the highest nonce of the executions\n")
+		fmt.Fprintf(out, "found up to it, with an official Safe singleton, of a § 2.1 version or of 1.0.0, 1.1.1, or 1.2.0, and\n")
+		fmt.Fprintf(out, "so is its nonce at the Safe block, as a delegate call or a module can set the nonce, and a delegate\n")
+		fmt.Fprintf(out, "call the singleton, to anything. An unknown execution, which may be such a delegate call, leaves it\n")
 		fmt.Fprintf(out, "incomplete, and so does that nonce or singleton if the node can't read it, such as at a block whose\n")
 		fmt.Fprintf(out, "state it doesn't keep, though a rate limit fails the command. A Safe that the service doesn't know is\n")
-		fmt.Fprintf(out, "a warning, and the scans look for all of its executions.\n")
-		fmt.Fprintf(out, "Executions by modules don't use nonces, and the service doesn't list them, so they aren't listed. But\n")
-		fmt.Fprintf(out, "a module, which a Safe transaction can enable and call, can change the nonce, so a complete history\n")
-		fmt.Fprintf(out, "doesn't rule out that a module did.\n\n")
+		fmt.Fprintf(out, "a warning, and the scans look for all of its executions. Executions by modules don't use nonces, and\n")
+		fmt.Fprintf(out, "the service doesn't list them, so they aren't listed, and only those in the blocks that it reads are\n")
+		fmt.Fprintf(out, "checked. A module, which a Safe transaction can enable and call, can change the nonce in another\n")
+		fmt.Fprintf(out, "block, so a complete history doesn't rule out that a module did.\n\n")
 		fmt.Fprintf(out, "It also reports the block that created the Safe's account, if the service names the transaction and the\n")
 		fmt.Fprintf(out, "chain confirms that the account got its code in that block, which needs a node that serves the code at\n")
 		fmt.Fprintf(out, "old blocks, or else, if a scan starts at it, the first block with the Safe's code. The transaction\n")
@@ -175,7 +177,8 @@ func executionsCommand(ctx context.Context, e *env, args []string) error {
 			Scanned: history.Scanned, Rejected: history.Rejected, Creation: history.Creation,
 		}
 		found = history.Executions
-		if !history.Complete() {
+		// FindAll warns about anything else that leaves the history incomplete.
+		if len(history.Missing) > 0 {
 			finder.Warn(fmt.Errorf("the executions found don't account for every nonce below the Safe's nonce %s at block %d", history.Nonce, ref.SafeBlock))
 		}
 	} else {
